@@ -112,38 +112,21 @@ class LedgerRuntime(LedgerBase):
             "feedback_counts": fc_serializable,
             "updated_at": datetime.now().isoformat(),
         }
-        # 原子写入：先写临时文件，再替换目标文件
-        # 解决 Windows 文件锁冲突（PermissionError on open "w"）
-        import tempfile
-        dir_path = os.path.dirname(self.store_path) or "."
-        tmp_fd, tmp_path = tempfile.mkstemp(dir=dir_path, suffix=".tmp", prefix="ledger_")
-        try:
-            os.close(tmp_fd)
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, self.store_path)
-        except PermissionError as e:
-            # 文件锁冲突：重试 3 次
-            import time as _time
-            for _retry in range(3):
-                _time.sleep(0.1)
-                try:
-                    os.replace(tmp_path, self.store_path)
-                    return
-                except PermissionError:
+        # 直接写入目标文件（沙箱环境下 tempfile.mkstemp 会被拦截导致 87 秒阻塞）
+        # 保留重试机制应对 Windows 文件锁冲突
+        import time as _time
+        for _retry in range(3):
+            try:
+                with open(self.store_path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                return
+            except (PermissionError, OSError) as e:
+                if _retry < 2:
+                    _time.sleep(0.1)
                     continue
-            # 降级为内存模式（不阻断核心功能）
-            logger.error(f"账本持久化失败（降级内存模式）: {e}")
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-        except Exception as e:
-            logger.error(f"账本持久化异常: {e}")
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+                # 降级为内存模式（不阻断核心功能）
+                logger.error(f"账本持久化失败（降级内存模式）: {e}")
+                return
 
     # ─── 哈希链 ────────────────────────────────────
 

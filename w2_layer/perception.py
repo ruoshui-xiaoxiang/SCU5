@@ -365,6 +365,20 @@ class PerceptionLayer(PerceivableMixin, SanitizableMixin):
             logger.info(f"分析型问题短路(不走工作流): text={text[:40]}")
             return ""
 
+        # ②.6 知识库查询短路：项目内部问题优先走RAG，不走工作流
+        # LLM会把"修复了哪些漏洞"误判为research_report，但这类问题应查知识库
+        if re.search(
+            r"SCU\d|修复了哪些|修复了什么|哪些安全漏洞|什么漏洞|"
+            r"对子思考.*根因|对子思考.*触发|对子.*修复|"
+            r"修复逻辑|修复方案|处理日志|分析报告|优化报告|"
+            r"CUF.*审计|熵税|账本|D层.*校验|"
+            r"哪些.*(?:功能|问题|漏洞|修复|端点|模块|能力)|"
+            r"什么.*(?:问题|漏洞|修复|功能|能力|模块)",
+            text, re.I
+        ):
+            logger.info(f"知识库查询短路(不走工作流): text={text[:40]}")
+            return ""
+
         # ③ LLM 完整语义推理（正则未命中兜底）
         # 覆盖纯主题输入（如"Python异步编程的优势"、"量子计算前景"）
         # 上下文感知：传入历史，LLM 能区分追问 vs 新话题

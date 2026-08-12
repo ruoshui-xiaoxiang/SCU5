@@ -320,9 +320,23 @@ class MultiAgentCoordinator:
             子任务ID
         """
         sid = subtask_id or f"sub_{uuid.uuid4().hex[:6]}"
+        # isolation 别名映射（提升易用性）
+        _ISOLATION_ALIASES = {
+            "shared": "thread",
+            "sharing": "thread",
+            "light": "thread",
+            "isolated": "process",
+            "isolate": "process",
+            "heavy": "process",
+            "独立": "process",
+            "隔离": "process",
+            "共享": "thread",
+        }
+        if isolation in _ISOLATION_ALIASES:
+            isolation = _ISOLATION_ALIASES[isolation]
         # 验证 isolation 覆盖
         if isolation is not None and isolation not in self.MODE_CONFIG:
-            raise ValueError(f"无效 isolation '{isolation}'")
+            raise ValueError(f"无效 isolation '{isolation}'，可选: thread/process 或别名: shared/isolated")
 
         self._subtasks.append({
             "subtask_id": sid,

@@ -1,6 +1,6 @@
 @echo off
 cd /d "%~dp0"
-title SCU4
+title SCU5
 setlocal
 
 set "PORT=8300"
@@ -20,7 +20,7 @@ if "%PY_EXE%"=="" (
 )
 
 echo ============================================================
-echo   SCU4 Smart Computing Unit
+echo   SCU5 Smart Computing Unit
 echo ============================================================
 echo   Python : %PY_EXE%
 echo   URL    : %URL%

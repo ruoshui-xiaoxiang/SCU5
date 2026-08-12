@@ -29,13 +29,16 @@ class ChatRequest(BaseModel):
 # ─── 对话路由 ────────────────────────────────
 @router.post("/chat")
 async def chat(req: ChatRequest, api_key: str = Depends(verify_api_key)):
+    import asyncio
     try:
         # P2修复：通过 deps 获取 process_request，避免直接 import server 造成循环依赖
         process_request = get("process_request")
         if process_request is None:
             # 降级：deps未注入时回退到直接导入
             from server import process_request
-        return JSONResponse(process_request(req.prompt, req.user_id))
+        # P1修复：process_request 含同步 LLM 调用，必须用 to_thread 包装避免阻塞事件循环
+        result = await asyncio.to_thread(process_request, req.prompt, req.user_id)
+        return JSONResponse(result)
     except Exception as e:
         # P1修复：不向客户端返回traceback（防止泄漏文件路径/库版本等敏感信息）
         import traceback as _tb

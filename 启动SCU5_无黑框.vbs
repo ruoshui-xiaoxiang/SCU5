@@ -1,4 +1,4 @@
-' SCU4 Silent Launcher
+' SCU5 Silent Launcher
 Option Explicit
 
 Dim WshShell, fso, strDir, pyExe, appPath, logPath, browserPath
@@ -16,14 +16,14 @@ traPyPath = "C:\Users\若水\AppData\Roaming\TRAE SOLO CN\ModularData\ai-agent\v
 If fso.FileExists(traPyPath) Then
     pyExe = traPyPath
 Else
-    MsgBox "Python not found:" & vbCrLf & traPyPath, vbCritical, "SCU4"
+    MsgBox "Python not found:" & vbCrLf & traPyPath, vbCritical, "SCU5"
     WScript.Quit 1
 End If
 
 appPath = fso.BuildPath(strDir, "server.py")
 browserPath = fso.BuildPath(strDir, "open_browser.py")
 If Not fso.FileExists(appPath) Then
-    MsgBox "server.py not found:" & vbCrLf & appPath, vbCritical, "SCU4"
+    MsgBox "server.py not found:" & vbCrLf & appPath, vbCritical, "SCU5"
     WScript.Quit 1
 End If
 
