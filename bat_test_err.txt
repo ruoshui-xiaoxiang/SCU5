@@ -1,0 +1,14 @@
+'��────────────' is not recognized as an internal or external command,
+operable program or batch file.
+'��到' is not recognized as an internal or external command,
+operable program or batch file.
+'浏览器...' is not recognized as an internal or external command,
+operable program or batch file.
+'EXE" open_browser.py' is not recognized as an internal or external command,
+operable program or batch file.
+'ho' is not recognized as an internal or external command,
+operable program or batch file.
+'打开' is not recognized as an internal or external command,
+operable program or batch file.
+'��端已退出（返回码' is not recognized as an internal or external command,
+operable program or batch file.
