@@ -18,6 +18,7 @@
 import logging
 from typing import Dict, Any
 from fastapi import APIRouter, Depends
+from guard.workflow_guard import cuf_audit
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -64,6 +65,7 @@ async def codegen_generate(req: CodeGenRequest, api_key: str = Depends(verify_ap
 
 # ─── 工具链 ────────────────────────────────
 @router.post("/toolchain/execute")
+@cuf_audit(op_id="toolchain", goal="多工具链式执行", subtasks_field="tools")
 async def toolchain_execute(req: ToolChainRequest, api_key: str = Depends(verify_api_key)):
     """多工具链式执行"""
     from m_layer.tool_chain import quick_chain

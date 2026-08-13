@@ -311,11 +311,25 @@ class ActionLayer:
 
         tool_info = self.detect_tool(text)
 
+        # intent→tool 映射层：感知层识别意图后，直接映射到对应工具
+        # ① detect_tool 返回 web_search 但 intent 是更具体的工具意图时，优先用 intent→tool
+        #    （避免"比特币多少钱"被 detect_tool 的 web_search 降级正则抢走）
+        # ② detect_tool 未命中时，按 intent 映射工具
+        _specific_intents = {"exchange_rate", "crypto_price", "stock_price", "github_search",
+                             "code_run", "unit_convert", "datetime_calc", "web_crawl", "calculate"}
+        if tool_info and tool_info.get("tool") == "web_search" and intent in _specific_intents:
+            _mapped = self._intent_to_tool(intent, text)
+            if _mapped:
+                tool_info = _mapped
+                logger.info(f"intent→tool 优先: intent={intent}, tool={_mapped['tool']}")
+        elif not tool_info:
+            tool_info = self._intent_to_tool(intent, text)
+
         # 强制完整流程：信息查询类意图未检测到工具时，主动注入 web_search
         # 确定性工具（calculator/time_now/weather/datetime_calc/unit_convert/file_*/code_run）
         # 走快速路径，不强制联网
         # followup/analytical 意图依赖对话历史或需要深度分析，不强制联网搜索
-        if not tool_info and intent in ("knowledge_query", "conversation", "greeting", "web_search"):
+        if not tool_info and intent in ("knowledge_query", "conversation", "web_search"):
             domain = ctx.get("domain", "general")
             # 智能搜索词生成：根据意图类型改写，避免原文直接搜索导致结果不相关
             query = self._smart_search_query(text, intent, domain)
@@ -358,6 +372,130 @@ class ActionLayer:
             ctx["tool_pending"] = False
         ctx["action_ok"] = True
         return ctx
+
+    def _intent_to_tool(self, intent: str, text: str) -> Optional[Dict[str, Any]]:
+        """intent→tool 映射层：感知层识别意图后，直接映射到对应工具
+
+        当 detect_tool 正则未命中时（用户表达不够标准），按 intent 调用工具。
+        参数从文本中尽力提取，提取失败用默认值。
+
+        支持的 intent→tool 映射：
+            exchange_rate → exchange_rate（默认 USD）
+            crypto_price  → crypto_price（默认 BTC）
+            stock_price   → stock_price（默认 000001）
+            github_search → github_search（提取关键词）
+            code_run      → code_run（提取代码）
+            unit_convert  → unit_convert（尽力提取）
+            datetime_calc → datetime_calc（尽力提取）
+            web_crawl     → web_crawl（提取URL）
+        """
+        import re as _re
+
+        if intent == "exchange_rate":
+            # 尝试提取三字母货币码，否则提取常见货币名
+            m = _re.search(r"([A-Za-z]{3})", text)
+            if m:
+                code = m.group(1).upper()
+                if code in ("USD", "EUR", "JPY", "GBP", "CNY", "KRW", "HKD", "AUD", "CAD"):
+                    return {"tool": "exchange_rate", "params": {"base": code}, "tool_type": "read"}
+            # 中文货币名映射
+            cur_map = {"美元": "USD", "欧元": "EUR", "日元": "JPY", "英镑": "GBP",
+                       "人民币": "CNY", "韩元": "KRW", "港币": "HKD", "澳元": "AUD"}
+            for cn, code in cur_map.items():
+                if cn in text:
+                    return {"tool": "exchange_rate", "params": {"base": code}, "tool_type": "read"}
+            return {"tool": "exchange_rate", "params": {"base": "USD"}, "tool_type": "read"}
+
+        if intent == "crypto_price":
+            m = _re.search(r"(bitcoin|btc|ethereum|eth|莱特币|ltc|狗狗币|doge)", text, _re.I)
+            symbol = m.group(1).lower() if m else "bitcoin"
+            # 中文映射
+            cn_map = {"莱特币": "ltc", "狗狗币": "doge"}
+            for cn, sym in cn_map.items():
+                if cn in text:
+                    symbol = sym
+            return {"tool": "crypto_price", "params": {"symbol": symbol}, "tool_type": "read"}
+
+        if intent == "stock_price":
+            # 尝试提取股票代码或名称
+            m = _re.search(r"([A-Za-z0-9]{1,6})", text)
+            code = m.group(1).upper() if m else "000001"
+            # 中文股票名映射（常见）
+            cn_stocks = {"茅台": "600519", "腾讯": "00700", "苹果": "AAPL",
+                         "阿里巴巴": "BABA", "百度": "BIDU", "比亚迪": "002594"}
+            for cn, c in cn_stocks.items():
+                if cn in text:
+                    code = c
+                    break
+            return {"tool": "stock_price", "params": {"code": code}, "tool_type": "read"}
+
+        if intent == "github_search":
+            # 去掉触发词，剩余作为查询
+            query = _re.sub(r"github.*?(?:搜索|搜|find|项目|repo|search)|搜索.*?仓库", "", text, flags=_re.I).strip()
+            query = query or "popular"
+            return {"tool": "github_search", "params": {"query": query}, "tool_type": "read"}
+
+        if intent == "code_run":
+            # 去掉触发词前缀，剩余作为代码
+            code = _re.sub(r"^(?:运行|执行|跑|run|exec|帮我运行|运行代码|执行代码|运行脚本|执行脚本)\s*", "", text, flags=_re.I).strip()
+            if not code:
+                code = text  # 全文当代码
+            return {"tool": "code_run", "params": {"code": code}, "tool_type": "write"}
+
+        if intent == "unit_convert":
+            # 尝试提取数值和单位
+            m = _re.search(r"([\d.]+)\s*([a-zA-Z℃斤磅里英尺加仑马力千克公斤]+)", text)
+            if m:
+                return {"tool": "unit_convert",
+                        "params": {"value": float(m.group(1)), "from_unit": m.group(2), "to_unit": ""},
+                        "tool_type": "read"}
+            return {"tool": "unit_convert",
+                    "params": {"value": 1, "from_unit": "", "to_unit": ""}, "tool_type": "read"}
+
+        if intent == "datetime_calc":
+            # 尝试提取日期，否则用今天
+            m = _re.search(r"(\d{4}-\d{2}-\d{2})", text)
+            start_date = m.group(1) if m else ""
+            m2 = _re.search(r"([+-])\s*(\d+)\s*天", text)
+            if m2:
+                return {"tool": "datetime_calc",
+                        "params": {"start": start_date, "op": m2.group(1), "days": int(m2.group(2))},
+                        "tool_type": "read"}
+            # "距离年底多少天" 等自然表达，传原文让工具自行解析
+            return {"tool": "datetime_calc",
+                    "params": {"start": start_date, "op": "+", "days": 0, "text": text},
+                    "tool_type": "read"}
+
+        if intent == "calculate":
+            # 提取算术表达式：优先匹配带运算符的表达式，否则提取数字+运算
+            # 形如 "1加2" "3乘4" "5减2等于几" "1+2等于多少"
+            expr_map = {"加": "+", "减": "-", "乘": "*", "除以": "/", "除": "/",
+                        "×": "*", "÷": "/"}
+            expr = text
+            for cn, op in expr_map.items():
+                expr = expr.replace(cn, op)
+            # 去掉"等于几/等于多少/结果是多少/是多少"等尾部问句
+            expr = re.sub(r"(等于几|等于多少|结果是多少|是多少|几|多少|\?)\s*$", "", expr)
+            expr = expr.strip()
+            # 提取首个 数字+运算符+数字 模式
+            m = re.search(r"([\d.]+\s*[+\-*/]\s*[\d.]+(?:\s*[+\-*/]\s*[\d.]+)*)", expr)
+            if m:
+                return {"tool": "calculator", "params": {"expression": m.group(1).strip()},
+                        "tool_type": "read"}
+            # 退化：把整段表达式丢给计算器（计算器内部会安全解析）
+            if re.search(r"\d", expr):
+                return {"tool": "calculator", "params": {"expression": expr},
+                        "tool_type": "read"}
+            return None  # 无数字，不调用计算器
+
+        if intent == "web_crawl":
+            # 提取URL
+            m = _re.search(r"(https?://\S+)", text)
+            if m:
+                return {"tool": "web_crawl", "params": {"url": m.group(1).strip()}, "tool_type": "read"}
+            return None  # 无URL无法爬取
+
+        return None
 
     def _smart_search_query(self, text: str, intent: str, domain: str = "general") -> str:
         """智能搜索词生成：根据意图类型改写口语化表达为搜索友好的关键词
@@ -1715,6 +1853,17 @@ class ActionLayer:
         thread.join(timeout=timeout)
 
         if thread.is_alive():
+            # 超时后强制中断线程（避免死循环占满CPU）
+            # 用 ctypes 向目标线程注入 KeyboardInterrupt，比 daemon=True 更可靠
+            try:
+                import ctypes
+                _tid = thread.ident
+                if _tid:
+                    _exc = ctypes.py_object(KeyboardInterrupt)
+                    ctypes.pythonapi.PyThreadState_SetAsyncExc(_tid, _exc)
+                    thread.join(timeout=0.5)  # 给线程0.5s响应异常
+            except Exception:
+                pass  # 注入失败则依赖 daemon 属性在进程退出时清理
             return {"output": "", "error": f"执行超时（>{timeout}秒）", "result": None}
 
         output = stdout_buf.getvalue()

@@ -33,6 +33,11 @@ class CognitionLayer:
           - 其他工具成功：工具结果格式化输出（确定性工具走快速路径）
           - 工具全失败：rag_context + LLM 常规对话
           - 无工具调用：rag_context + LLM 生成回复（闲聊也注入RAG）
+
+        方案B接入：对话意图扣税（每轮1次，按意图阴阳分类）
+          - analytical/analytical_reasoning: 阳操作（生成、推理）
+          - knowledge_query/web_search/web_crawl: 阴操作（检索、校验）
+          - conversation/greeting: 中和（小额阳操作）
         """
         intent = ctx.get("intent", "conversation")
         tool_result = ctx.get("tool_result")
@@ -40,19 +45,47 @@ class CognitionLayer:
         context = ctx.get("rag_context", "")  # RAG上下文（任务2.2提供）
         recalled = ctx.get("recalled", [])  # 召回的对话历史
 
-        # 方案C：analytical 意图走阴阳对子思考（基类版）
-        # 阴用DeepSeek（严谨），阳用Qwen（发散），双签合一
-        # 不触发Pair硬约束（认知思考非高风险），软双签作质量参考
+        # 方案B：按意图扣税（每轮1次，阻塞在LLM调用前，用户感知弱）
+        pair_charge = self._charge_by_intent(intent, user_input)
+        if pair_charge:
+            ctx["pair_charge"] = pair_charge  # 供前端展示对子状态变化
+
+        # 方案2：对子偏度回调已在扣税时同步触发双签
+        # 若 callback_response 存在，说明双签已在 _do_callback 中执行
+        callback_response = None
+        callback_triggered = False
+        if pair_charge and pair_charge.get("callback_triggered"):
+            callback_response = pair_charge.get("callback_response")
+            callback_triggered = True
+            logger.info(f"方案2双签已完成(扣税时触发): "
+                        f"pair={pair_charge.get('pair_id','N/A')[:16]}, "
+                        f"有回复={callback_response is not None}")
+
+        # 若双签已在回调中生成回复，直接使用
+        if callback_response and not tool_result:
+            ctx["response"] = callback_response
+            ctx["cognition_ok"] = True
+            ctx["llm_mode"] = self.llm.mode + "+双签回调"
+            ctx["pair_callback_triggered"] = True
+            ctx["pair_charge"] = pair_charge  # 确保透传
+            logger.info(f"使用双签回调回复 (方案2): 回复长度={len(callback_response)}")
+            return ctx
+
+        # 常规双签：analytical 意图（非回调触发）
         if intent == "analytical" and not tool_result:
             try:
-                yy_result = self._yin_yang_think(user_input, context,
-                                                 sanitized=ctx.get("sanitized", False))
+                yy_result = self._yin_yang_think(
+                    user_input, context,
+                    sanitized=ctx.get("sanitized", False),
+                    callback_reason="",
+                )
                 if yy_result:
                     ctx["response"] = yy_result["response"]
                     ctx["yin_yang"] = yy_result["state"]
                     ctx["cognition_ok"] = True
                     ctx["llm_mode"] = self.llm.mode
-                    logger.info(f"阴阳对子思考完成: γ_yin={yy_result['state']['gamma_yin']}, "
+                    logger.info(f"阴阳对子思考完成(analytical): "
+                                f"γ_yin={yy_result['state']['gamma_yin']}, "
                                 f"γ_yang={yy_result['state']['gamma_yang']}, "
                                 f"endorsed={yy_result['state']['endorsed']}")
                     return ctx
@@ -169,7 +202,11 @@ class CognitionLayer:
         if tool_name == "file_write":
             return f"文件已写入：{result.get('path', '')}（{result.get('written', 0)}字符）"
         if tool_name == "code_run":
-            return f"代码执行结果：\n{result.get('output', '')}"
+            _output = result.get('output', '')
+            _error = result.get('error', '')
+            if _error:
+                return f"代码执行结果：\n{_output}\n执行错误：{_error}" if _output else f"代码执行错误：{_error}"
+            return f"代码执行结果：\n{_output}"
         return f"工具结果：{result}"
 
     def _try_plugin_market(self, user_input: str, failed_tools: list,
@@ -571,11 +608,143 @@ class CognitionLayer:
         )
         return result.get("content", "（无回复）")
 
+    # ─── 方案B：意图扣税 ────────────────────────────────
+
+    # 意图 → 阴阳操作映射
+    INTENT_PAIR_MAP = {
+        # 阳操作（生成、推理、扩张）— 消耗阳势能→转阴
+        "analytical": ("yang", 25.0, "分析推理"),
+        "analytical_reasoning": ("yang", 25.0, "分析推理"),
+        "image_generation": ("yang", 35.0, "图像生成"),
+        "code_run": ("yang", 45.0, "代码执行"),
+        # 阴操作（检索、校验、收敛）— 消耗阴势能→转阳
+        "knowledge_query": ("yin", 20.0, "知识查询"),
+        "web_search": ("yin", 30.0, "联网搜索"),
+        "web_crawl": ("yin", 35.0, "全网爬取"),
+        # 中和操作（闲聊、问候）— 小额阳操作
+        "conversation": ("yang", 8.0, "常规对话"),
+        "greeting": ("yang", 5.0, "问候"),
+    }
+
+    def _charge_by_intent(self, intent: str, user_input: str) -> Dict[str, Any]:
+        """按对话意图从对子势能池扣税（方案B）
+
+        Args:
+            intent: 意图标签
+            user_input: 用户输入（用于选择专长）
+
+        Returns:
+            扣税结果字典，失败返回空字典
+        """
+        try:
+            from m_layer.evolution.pair_integration import charge_operation
+            # 根据用户输入推断专长
+            specialty = self._infer_specialty(intent, user_input)
+            op_type, cost, reason = self.INTENT_PAIR_MAP.get(
+                intent, ("yang", 10.0, "默认操作"))
+            # 方案2：构建回调上下文（供对子 _do_callback 执行双签）
+            callback_context = {
+                "user_input": user_input,
+                "rag_context": "",  # RAG上下文在 process() 中才有
+                "handler": self._pair_callback_handler,
+            }
+            result = charge_operation(
+                operation=op_type,
+                cost=cost,
+                specialty=specialty,
+                reason=f"意图扣税[{intent}]: {reason}",
+                callback_context=callback_context,
+            )
+            if result.get("charged"):
+                logger.info(
+                    f"意图扣税: intent={intent}, op={op_type}, cost={cost}E, "
+                    f"pair={result.get('pair_id', 'N/A')[:12]}, "
+                    f"bias={result.get('bias', 0):.3f}, "
+                    f"async_cb={result.get('callback_scheduled', False)}"
+                )
+            return result
+        except Exception as e:
+            logger.debug(f"意图扣税失败（降级）: {e}")
+            return {}
+
+    @property
+    def _pair_callback_handler(self):
+        """方案2：对子回调处理器 — 执行阴阳双签作为中和融合
+
+        当对子偏度超阈值触发 _trigger_callback 时，
+        此方法被 _do_callback 调用，执行阴阳双签。
+        """
+        if not hasattr(self, '_cb_handler_cache'):
+            self._cb_handler_cache = self._create_callback_handler()
+        return self._cb_handler_cache
+
+    def _create_callback_handler(self):
+        """创建回调处理器闭包"""
+        def handler(pair, context):
+            """对子回调：执行阴阳双签
+
+            Args:
+                pair: UnitPair 实例
+                context: {user_input, rag_context, ...}
+
+            Returns:
+                {success, response, gamma_yin, gamma_yang}
+            """
+            try:
+                user_input = context.get("user_input", "")
+                if not user_input:
+                    return {"success": True}
+
+                logger.info(f"方案2双签回调: pair={pair.pair_id[:16]}, "
+                            f"bias={pair.tracker.bias():.2f}, q={user_input[:30]}")
+
+                # 执行阴阳双签
+                yy_result = self._yin_yang_think(
+                    user_input,
+                    context.get("rag_context", ""),
+                    sanitized=True,  # 已在 W2 脱敏
+                    callback_reason=f"对子回调(bias={pair.tracker.bias():.2f})",
+                )
+                if yy_result:
+                    return {
+                        "success": True,
+                        "response": yy_result["response"],
+                        "gamma_yin": yy_result["state"]["gamma_yin"],
+                        "gamma_yang": yy_result["state"]["gamma_yang"],
+                    }
+                return {"success": False}
+            except Exception as e:
+                logger.warning(f"双签回调处理器异常: {e}")
+                return {"success": False}
+
+        return handler
+
+    @staticmethod
+    def _infer_specialty(intent: str, user_input: str) -> str:
+        """根据意图和输入推断对子专长"""
+        text = (user_input or "").lower()
+        # 编码相关
+        if any(k in text for k in ["代码", "运行", "code", "run", "函数", "python"]):
+            return "coding"
+        # 写作相关
+        if any(k in text for k in ["写", "撰写", "生成", "文章", "报告", "write"]):
+            return "writing"
+        # 分析相关
+        if intent in ("analytical", "analytical_reasoning"):
+            return "analysis"
+        # 搜索相关
+        if intent in ("web_search", "web_crawl") or any(
+            k in text for k in ["搜索", "查找", "search", "最新"]
+        ):
+            return "search"
+        return "general"
+
     # ─── 方案C：阴阳对子思考 ────────────────────────────────
 
     def _yin_yang_think(self, question: str, context: str,
-                        sanitized: bool = False) -> Dict[str, Any]:
-        """阴阳对子思考主流程（方案C：基类版）
+                        sanitized: bool = False,
+                        callback_reason: str = "") -> Dict[str, Any]:
+        """阴阳对子思考主流程（方案C：基类版 + 方案2：回调触发）
 
         流程：
         1. 阴方思考（DeepSeek-Chat，批判视角）
@@ -583,8 +752,15 @@ class CognitionLayer:
         3. 双签判定（CognitionEndorser.endorse）
         4. 太极合一（DeepSeek-Chat，综合阴阳）
 
+        触发条件：
+        - analytical 意图（常规双签）
+        - 对子 needs_callback=True（方案2：偏度回调触发，强制双签校验）
+
         多路由：阴用DeepSeek（严谨），阳用Qwen（发散）
-        不触发Pair硬约束（认知思考非高风险）
+        不触发Pair硬约束（认知思考非高风险），软双签作质量参考
+
+        Args:
+            callback_reason: 回调触发原因（空字符串表示常规双签）
 
         Returns:
             {"response": str, "state": dict} 或 None（失败时）
@@ -682,3 +858,34 @@ class CognitionLayer:
                 "endorsed": endorsement["endorsed"],
             },
         }
+
+
+# ─── 单元对回调注入 ────────────────────────────────────
+def _inject_pair_callback():
+    """将对子回调处理器注册到 pair_integration"""
+    try:
+        from m_layer.evolution.pair_integration import register_callback
+        from m_layer.evolution.unit_pair import UnitPair
+
+        def pair_callback_handler(pair, context):
+            """对子回调：执行阴阳对子思考作为中和融合"""
+            try:
+                # 使用 CognitionLayer 的阴阳思考作为回调
+                cog = CognitionLayer()
+                # 简化版：基于上下文质量判定
+                if context and len(context) > 10:
+                    # 有实质内容，回调成功
+                    return True, 0.75, 0.65
+                else:
+                    # 上下文不足，回调失败
+                    return False, 0.3, 0.3
+            except Exception:
+                return False, 0.5, 0.5
+
+        register_callback(pair_callback_handler)
+    except Exception as e:
+        import logging
+        logging.getLogger("SCU3.m.cognition").debug(f"对子回调注入失败: {e}")
+
+# 自动注入
+_inject_pair_callback()

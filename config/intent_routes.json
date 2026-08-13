@@ -1,0 +1,264 @@
+{
+  "_comment": "SCU5.1 意图路由配置（限制8：配置化替代硬编码）",
+  "_comment2": "按 intent_order 顺序匹配，命中即返回对应 intent",
+  "version": "5.1",
+  "intent_order": [
+    "followup",
+    "workflow",
+    "analytical",
+    "calculate",
+    "weather",
+    "time",
+    "exchange_rate",
+    "crypto_price",
+    "stock_price",
+    "github_search",
+    "text_stats",
+    "document_read",
+    "translate",
+    "qrcode",
+    "image_generation",
+    "image_process",
+    "md_render",
+    "code_run",
+    "unit_convert",
+    "datetime_calc",
+    "web_crawl",
+    "greeting",
+    "knowledge_query",
+    "web_search_domain",
+    "web_search",
+    "conversation"
+  ],
+  "rules": {
+    "followup": {
+      "pattern": "我刚才|刚才那个|刚才问的|刚才说的|上面.*提到|前文|上一个|再详细|再深入|再解释|详细解释|深入分析|展开说|继续说|接着说|不是这个|不对|不是.*意思|换个|另一个方面|另一方面|反对.*理由|支持.*理由|你.*说的|你.*提到|你的.*回答|基于.*刚才|基于.*上面|基于.*前文",
+      "intent": "followup",
+      "group": "conversation"
+    },
+    "analytical": {
+      "patterns": [
+        "分析.*假设|潜在.*假设|批判|反思|反驳|论证|逻辑.*漏洞|推理|辩证|第一性原理|苏格拉底|反对.*理由|支持.*理由|利弊分析|优缺点分析|对比.*分析|分析.*(?:可能性|可行性|影响|原因|趋势|前景|利弊|优缺点|风险|机会|本质|原理|影响)",
+        "对比.*(?:优劣|区别|差异|相同|不同|异同)|比较.*(?:方案|选项|观点|理论|方法)",
+        "(?:为什么|为何|何以).*(?:导致|引起|造成|产生|发生|失败|成功)",
+        "(?:评估|评价|审视|衡量).*(?:效果|质量|价值|可行性|合理性|代价|成本)",
+        "(?:假设|假如|如果|倘若|万一).*(?:会怎样|结果如何|发生什么|影响)",
+        "(?:根本|核心|深层|内在).*(?:原因|机理|机制|逻辑|动力)",
+        "(?:权衡|取舍|抉择|两难|博弈).*(?:方案|选择|策略)"
+      ],
+      "intent": "analytical",
+      "_comment": "SCU5.1 扩展（限制7）：新增对比类/因果类/评估类/假设类/机理类/权衡类模式",
+      "group": "analysis"
+    },
+    "calculate": {
+      "pattern": "计算|算一下|算算|calc|[\\d.]+\\s*[+\\-*/×÷]\\s*[\\d.]+|等于几|等于多少|结果是多少|是多少|加几|减几|乘几|除以几|开平方|开根号|求余|取模",
+      "intent": "calculate",
+      "group": "task"
+    },
+    "weather": {
+      "pattern": "天气|气温|weather",
+      "intent": "weather",
+      "group": "information"
+    },
+    "time": {
+      "pattern": "几点|几点了|现在.*时间|当前.*时间|什么.*时间|时间.*多少|now(?!.*sleep)|time(?!\\.)",
+      "intent": "time",
+      "group": "information"
+    },
+    "text_stats": {
+      "pattern": "统计|字数",
+      "intent": "text_stats",
+      "group": "conversation"
+    },
+    "document_read": {
+      "pattern": "\\.pdf|读取pdf|解析pdf|pdf内容|read pdf|\\.docx?|读取word|读取docx|解析.*word|解析.*docx|read docx|\\.xlsx?|读取excel|解析xlsx|解析.*excel|读取表格|read excel",
+      "intent": "document_read",
+      "group": "task"
+    },
+    "translate": {
+      "pattern": "翻译|translate|英文翻译|中文翻译",
+      "intent": "translate",
+      "group": "task"
+    },
+    "qrcode": {
+      "pattern": "二维码|qrcode|生成码",
+      "intent": "qrcode",
+      "group": "creation"
+    },
+    "image_generation": {
+      "pattern": "生成.*图片|画.*(张|幅|个|只|条|头|棵|朵|片|座|辆|匹|扇|轮|颗|群)|生成.*图|创建.*图片|制作.*图片|画.*图|帮我画|给我画|画.*(猫|狗|人|花|树|鸟|鱼|天|星|月|山|水|海|房|车|风景|动物|人物)|draw|generate.*image|文生图|AI画",
+      "intent": "image_generation",
+      "group": "creation"
+    },
+    "image_process": {
+      "pattern": "处理图片|缩放图片|裁剪图片|图片转格式|image process|\\.(?:png|jpg|jpeg|gif|bmp)",
+      "intent": "image_process",
+      "group": "task"
+    },
+    "md_render": {
+      "pattern": "渲染markdown|md转|markdown转|渲染md",
+      "intent": "md_render",
+      "group": "creation"
+    },
+    "greeting": {
+      "pattern": "你好|hello|hi|介绍一下$|介绍一下$|自我介绍",
+      "intent": "greeting",
+      "group": "conversation"
+    },
+    "knowledge_query": {
+      "pattern": "SCU3|CUF|本系统|本程序|本架构|三级记忆|L1|L2|L3|守卫|D层|M层|W1|W2|熵税|阴阳|Pair|自进化|自修改|插件市场|向量库",
+      "intent": "knowledge_query",
+      "group": "information"
+    },
+    "web_search": {
+      "pattern": "搜索|搜一下|搜搜|查一下|查查|帮我查|search|google一下|百度一下|最新|最近|今日|今天.*新闻|近期|2024|2025|2026|现在是.*年|怎么样|是什么|是谁|多少钱|发生.*事|热点|热搜",
+      "intent": "web_search",
+      "group": "information"
+    },
+    "exchange_rate": {
+      "pattern": "汇率|美元.*人民币|人民币.*美元|换汇|外币.*兑换|美元.*多少|欧元.*多少|日元.*多少|英镑.*多少|exchange.?rate|USD.*CNY|CNY.*USD",
+      "intent": "exchange_rate",
+      "group": "information"
+    },
+    "crypto_price": {
+      "pattern": "比特币|以太坊|加密货币.*价格|币价|BTC.*价格|ETH.*价格|比特币.*多少|以太坊.*多少|莱特币|狗狗币|crypto.?price",
+      "intent": "crypto_price",
+      "group": "information"
+    },
+    "stock_price": {
+      "pattern": "股价|股票.*价格|A股|港股|美股|涨停|跌停|行情|K线|大盘|指数|茅台.*股价|腾讯.*股价|苹果.*股价|stock.?price",
+      "intent": "stock_price",
+      "group": "information"
+    },
+    "github_search": {
+      "pattern": "github.*搜索|github.*搜|搜.*github|github.*find|搜索.*仓库|github.*项目|github.*repo",
+      "intent": "github_search",
+      "group": "information"
+    },
+    "code_run": {
+      "pattern": "运行.*代码|执行.*代码|跑.*代码|run.*code|代码.*运行|代码.*执行|帮我.*运行|执行.*脚本|运行.*脚本|run.*script",
+      "intent": "code_run",
+      "group": "task"
+    },
+    "unit_convert": {
+      "pattern": "换算|转换.*单位|磅.*公斤|公斤.*磅|华氏.*摄氏|摄氏.*华氏|英里.*公里|公里.*英里|英尺.*米|米.*英尺|加仑.*升|升.*加仑|unit.?convert|马力.*千瓦|公里.*米|米.*公里|千米.*米|米.*千米|千克.*克|克.*千克|公斤.*克|克.*公斤|吨.*千克|千克.*吨|小时.*分钟|分钟.*小时|天.*小时|小时.*天|秒.*分钟|分钟.*秒|平方米.*平方|平方.*平方米",
+      "intent": "unit_convert",
+      "group": "task"
+    },
+    "datetime_calc": {
+      "pattern": "距离.*多少天|相差.*天|几天后|多少天前|日期计算|date.?calc|距.*还有|过了.*天|之间.*天",
+      "intent": "datetime_calc",
+      "group": "task"
+    },
+    "web_crawl": {
+      "pattern": "爬取.*网页|抓取.*网页|crawl.*url|爬.*网站|抓取.*网站|爬取.*页面|抓取.*页面|fetch.*url|爬.*链接",
+      "intent": "web_crawl",
+      "group": "task"
+    }
+  },
+  "workflow": {
+    "_comment": "工作流自动触发配置（全配置化，零硬编码）",
+    "strong_signals": {
+      "research_report": "深度研究|研究报告|全面调研|深度调研|专题研究|研究一下|调研一下|深入调研",
+      "code_solution": "完整代码方案|代码方案|实现方案|技术方案|写个方案|给个方案|完整方案",
+      "decision_analysis": "决策分析|帮我决策|帮我做决定|决策一下|决定一下|帮我选择|选择分析",
+      "content_creation": "创作一篇|写一篇.{0,4}文章|写篇文章|创作内容|写一篇.{0,4}文案|写个文案",
+      "bug_investigation": "排查bug|调试问题|排查问题|bug排查|调试bug|定位bug|排查一下",
+      "learning_path": "学习路径|学习路线|系统学习|学习计划|学习规划|怎么学|学习指南",
+      "product_prd": "产品需求文档|写个prd|生成prd|需求文档|PRD",
+      "project_plan": "项目方案|项目计划|实施方案|规划方案|project.?plan",
+      "data_analysis": "数据分析报告|数据报告|数据分析|分析数据|data.?analysis",
+      "security_audit": "安全审计|安全扫描|漏洞扫描|安全评估|security.?audit",
+      "test_plan": "测试方案|测试计划|测试用例设计|test.?plan",
+      "translation_review": "翻译审校|翻译并审校|翻译校对|审校翻译|translation",
+      "code_review": "代码评审|代码审查|review代码|代码review|code.?review",
+      "competitor_analysis": "竞品分析|竞品对比|竞争对手分析|竞品调研"
+    },
+    "loose_verbs": "分析一下|研究一下|调研一下|写一下|了解一下|梳理一下|梳理下|整理一下|整理下|探讨一下|讨论一下",
+    "short_circuits": {
+      "_comment": "短路逻辑：命中则不走工作流，让对应意图接管",
+      "analytical_topic": {
+        "_comment": "宽松动词匹配后，主题含分析型关键词则不走workflow",
+        "pattern": "可行性|利弊|优缺点|对比.*(?:优劣|区别|差异|相同|不同|异同)|比较.*(?:方案|选项|观点|理论|方法)|假设|批判|反思|反驳|论证|逻辑.*漏洞|辩证|(?:为什么|为何).*(?:导致|引起|造成|产生|发生)|(?:评估|评价).*(?:效果|质量|价值|可行性|合理性)|(?:根本|核心|深层).*(?:原因|机理|机制)"
+      },
+      "analytical": {
+        "_comment": "分析型问题短路（原 analytical_short_circuit）",
+        "patterns": [
+          "分析.*假设|潜在.*假设|批判|反思|反驳|论证|逻辑.*漏洞|推理|辩证|第一性原理|苏格拉底|反对.*理由|支持.*理由|利弊分析|优缺点分析|对比.*分析|分析.*(?:可能性|可行性|影响|原因|趋势|前景|利弊|优缺点|风险|机会|本质|原理|影响)",
+          "对比.*(?:优劣|区别|差异|相同|不同|异同)|比较.*(?:方案|选项|观点|理论|方法)",
+          "(?:为什么|为何|何以).*(?:导致|引起|造成|产生|发生|失败|成功)",
+          "(?:评估|评价|审视|衡量).*(?:效果|质量|价值|可行性|合理性|代价|成本)",
+          "(?:假设|假如|如果|倘若|万一).*(?:会怎样|结果如何|发生什么|影响)",
+          "(?:根本|核心|深层|内在).*(?:原因|机理|机制|逻辑|动力)",
+          "(?:权衡|取舍|抉择|两难|博弈).*(?:方案|选择|策略)"
+        ]
+      },
+      "knowledge": {
+        "_comment": "知识库查询短路（原 knowledge_short_circuit）",
+        "pattern": "SCU\\d|修复了哪些|修复了什么|哪些安全漏洞|什么漏洞|对子思考.*根因|对子思考.*触发|对子.*修复|修复逻辑|修复方案|处理日志|分析报告|优化报告|CUF.*审计|熵税|账本|D层.*校验|哪些.*(?:功能|问题|漏洞|修复|端点|模块|能力)|什么.*(?:问题|漏洞|修复|功能|能力|模块)"
+      },
+      "web_search": {
+        "_comment": "联网搜索短路：时效性问题不走工作流",
+        "pattern": "最新|最近|今日|今天.*新闻|近期|热搜|热点|实时|现在.*价格|现在.*多少钱|行情|发生了什么|最新进展|最新消息"
+      }
+    }
+  },
+  "followup_llm": {
+    "_comment": "followup LLM兜底：当意图为conversation且有对话历史时，调LLM判断是否追问",
+    "enabled": true,
+    "min_history": 1,
+    "min_text_length": 3
+  },
+  "intent_groups": {
+    "_comment": "一级意图分类（group），二级意图为 rules 中的 intent",
+    "information": {
+      "label": "信息查询",
+      "intents": [
+        "web_search",
+        "knowledge_query",
+        "weather",
+        "time",
+        "exchange_rate",
+        "crypto_price",
+        "stock_price",
+        "github_search"
+      ]
+    },
+    "creation": {
+      "label": "创作生成",
+      "intents": [
+        "image_generation",
+        "md_render",
+        "qrcode"
+      ]
+    },
+    "task": {
+      "label": "任务执行",
+      "intents": [
+        "calculate",
+        "code_run",
+        "unit_convert",
+        "datetime_calc",
+        "translate",
+        "image_process",
+        "document_read",
+        "web_crawl"
+      ]
+    },
+    "analysis": {
+      "label": "分析推理",
+      "intents": [
+        "analytical",
+        "workflow"
+      ]
+    },
+    "conversation": {
+      "label": "对话交互",
+      "intents": [
+        "greeting",
+        "followup",
+        "conversation"
+      ]
+    }
+  }
+}

@@ -14,6 +14,7 @@ import logging
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
+from api.middleware import run_sync
 from api.deps import verify_api_key, verify_admin_key, get
 
 logger = logging.getLogger("SCU3.api.memory")
@@ -56,7 +57,7 @@ async def memory_search(query: str, layers: str = "L1,L2,L3",
     try:
         memory = get("memory")
         layer_list = [l.strip() for l in layers.split(",") if l.strip()]
-        result = memory.search_cross_layer(
+        result = await run_sync(memory.search_cross_layer, 
             query, layers=layer_list, top_k=top_k,
             **({"category": category} if category else {})
         )
@@ -70,7 +71,7 @@ async def memory_save_episode(req: dict, api_key: str = Depends(verify_api_key))
     """保存情景到 L3（任务轨迹/反思/决策）"""
     try:
         memory = get("memory")
-        eid = memory.save_episode(
+        eid = await run_sync(memory.save_episode, 
             event_type=str(req.get("event_type", "task")),
             task_desc=str(req.get("task_desc", ""))[:500],
             steps=req.get("steps", []),
@@ -88,7 +89,7 @@ async def memory_save_knowledge(req: dict, api_key: str = Depends(verify_api_key
     """保存知识到 L2（语义记忆）"""
     try:
         memory = get("memory")
-        kid = memory.save_knowledge(
+        kid = await run_sync(memory.save_knowledge, 
             content=str(req.get("content", ""))[:2000],
             source=str(req.get("source", "manual")),
             category=str(req.get("category", "general")),
@@ -111,7 +112,7 @@ async def memory_forget(layer: str, item_id: str,
     """
     try:
         memory = get("memory")
-        deleted = memory.forget(layer, item_id)
+        deleted = await run_sync(memory.forget, layer, item_id)
         return JSONResponse({"success": deleted, "data": {"deleted": deleted}})
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)})
@@ -122,7 +123,7 @@ async def memory_clear_l1(api_key: str = Depends(verify_admin_key)):
     """清空工作记忆（需管理员权限）"""
     try:
         memory = get("memory")
-        memory.clear_l1()
+        await run_sync(memory.clear_l1, )
         return JSONResponse({"success": True, "data": {"cleared": True}})
     except Exception as e:
         return JSONResponse({"success": False, "error": str(e)})

@@ -17,6 +17,7 @@ import logging
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, HTMLResponse, PlainTextResponse, Response
 
+from api.middleware import run_sync
 from api.deps import verify_api_key, verify_admin_key, get
 
 logger = logging.getLogger("SCU3.api.system")
@@ -56,7 +57,7 @@ async def health():
         "status": "ok",
         "arch": "v3",
         "version": "3.0.0",
-        "balance": round(ledger.balance(), 4) if ledger else 0.0,
+        "balance": round(await run_sync(ledger.balance), 4) if ledger else 0.0,
     })
 
 
@@ -65,15 +66,15 @@ async def status(request: Request, api_key: str = Depends(verify_admin_key)):
     ledger = get("ledger")
     whitelist = get("whitelist")
     metacog = get("metacog")
-    bal = ledger.balance() if ledger else 0.0
+    bal = await run_sync(ledger.balance) if ledger else 0.0
     return JSONResponse({
         "arch": "v3", "version": "3.0.0",
         "balance": round(bal, 4),
         "balance_warning": bal < 50.0,
         "balance_critical": bal < 10.0,
         "ledger_ready": getattr(request.app.state, "ledger_ready", True),
-        "stats": ledger.stats() if ledger else {},
-        "whitelist_count": len(whitelist.list_all()) if whitelist else 0,
+        "stats": await run_sync(ledger.stats) if ledger else {},
+        "whitelist_count": len(await run_sync(whitelist.list_all)) if whitelist else 0,
         "last_audit": metacog._last_audit_time.isoformat()
                       if metacog and getattr(metacog, "_last_audit_time", None) else None,
     })
@@ -82,7 +83,7 @@ async def status(request: Request, api_key: str = Depends(verify_admin_key)):
 @router.get("/history")
 async def history(limit: int = 20, api_key: str = Depends(verify_admin_key)):
     ledger = get("ledger")
-    return JSONResponse({"history": ledger.history(limit) if ledger else []})
+    return JSONResponse({"history": await run_sync(ledger.history, limit) if ledger else []})
 
 
 @router.get("/help")
@@ -118,7 +119,7 @@ async def self_check_quick(api_key: str = Depends(verify_admin_key)):
     return JSONResponse({"success": True, "data": {
         "status": "ok",
         "arch": "v3",
-        "balance": round(ledger.balance(), 4) if ledger else 0.0,
+        "balance": round(await run_sync(ledger.balance), 4) if ledger else 0.0,
         "layers": {"W2": "ok", "W1": "ok", "M": "ok", "D": "ok"},
         "guards": {"g1": "ok", "g2": "ok", "g3": "ok", "g4": "ok", "g5": "ok"},
     }})
@@ -133,9 +134,9 @@ async def self_check_full(api_key: str = Depends(verify_admin_key)):
         "status": "ok",
         "arch": "v3",
         "version": "3.0.0",
-        "balance": round(ledger.balance(), 4) if ledger else 0.0,
-        "stats": ledger.stats() if ledger else {},
-        "whitelist_count": len(whitelist.list_all()) if whitelist else 0,
+        "balance": round(await run_sync(ledger.balance), 4) if ledger else 0.0,
+        "stats": await run_sync(ledger.stats) if ledger else {},
+        "whitelist_count": len(await run_sync(whitelist.list_all)) if whitelist else 0,
         "layers": {"W2": "ok", "W1": "ok", "M": "ok", "D": "ok"},
         "guards": {"g1_W2_W1": "ok", "g2_W1_M": "ok", "g3_tool": "ok",
                    "g4_audit": "ok", "g5_filter": "ok"},

@@ -497,7 +497,7 @@
       <button class="nav-item" data-panel="agent"><span class="icon" id="ic-agent"></span>Agent</button>
     </nav>
     <div class="sidebar-footer" id="sidebarFooter">
-      <span class="ver">SCU5.0 · 智能助手版</span>
+      <span class="ver">SCU6.0 · 太极熵税版</span>
       <span>连接中...</span>
     </div>
   </aside>
@@ -514,6 +514,12 @@
       </div>
       <div id="chatPairApiWrap" style="display:none">
         <span id="chatPairApiTag" style="display:inline-block;font-size:10.5px;padding:3px 9px;border-radius:12px;background:var(--accent-soft);border:1px solid rgba(167,139,250,.2);color:var(--accent);font-weight:500;letter-spacing:-.005em;"></span>
+      </div>
+      <div class="pair-indicator" id="upairIndicator" onclick="document.querySelector('[data-panel=monitor]').click()" title="单元对生态系统 — 太极熵税模型" style="border-color:rgba(16,185,129,.2);background:rgba(16,185,129,.06)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--success)"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 0 0 20c2.5 0 4.5-3.1 4.5-7S14.5 2 12 2z" fill="currentColor" opacity="0.5"/></svg>
+        <span style="color:var(--success)">生态</span>
+        <span class="pair-dot" id="upairDot"></span>
+        <span class="pair-count" id="upairCount" style="color:var(--success)">加载中</span>
       </div>
       <div class="cuf-indicator" id="cufIndicator" onclick="document.querySelector('[data-panel=monitor]').click()" title="CUF 安全内核 — 点击查看详情">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
@@ -778,6 +784,28 @@
           <div class="card">
             <div class="card-title">学习引擎统计</div>
             <div id="monLearn" class="json-view">加载中...</div>
+          </div>
+        </div>
+
+        <!-- 🆕 单元对生态系统（太极熵税模型） -->
+        <div class="card" style="margin-top:16px">
+          <div class="card-title" style="display:flex;align-items:center;justify-content:space-between">
+            <span>单元对生态系统 · 太极熵税</span>
+            <span style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:500;color:var(--text-muted)">
+              <span id="upairEnergy">势能 -</span>
+              <button class="btn btn-ghost btn-sm" onclick="loadUnitPairStatus()" style="padding:3px 9px">刷新</button>
+            </span>
+          </div>
+          <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+            <button class="btn btn-primary btn-sm" onclick="upairSpawn('analysis')" style="padding:5px 11px;font-size:12px">诞生·分析对子</button>
+            <button class="btn btn-primary btn-sm" onclick="upairSpawn('writing')" style="padding:5px 11px;font-size:12px">诞生·写作对子</button>
+            <button class="btn btn-primary btn-sm" onclick="upairSpawn('coding')" style="padding:5px 11px;font-size:12px">诞生·编码对子</button>
+            <button class="btn btn-ghost btn-sm" onclick="upairSynergy()" style="padding:5px 11px;font-size:12px">协同融合</button>
+            <button class="btn btn-ghost btn-sm" onclick="upairCollect()" style="padding:5px 11px;font-size:12px">经验回收</button>
+            <button class="btn btn-ghost btn-sm" onclick="upairDispatch()" style="padding:5px 11px;font-size:12px">分工协作</button>
+          </div>
+          <div id="upairList" style="max-height:320px;overflow-y:auto">
+            <div class="empty" style="padding:20px"><div class="empty-icon"></div>加载中...</div>
           </div>
         </div>
 
@@ -1471,7 +1499,7 @@ function renderAI(s){
     const placeholders = [];
     let text = s.replace(/\[IMAGE\]([^\[]+)\[\/IMAGE\]/g, (m, path) => {
       const idx = placeholders.length;
-      placeholders.push(`<div style="margin:8px 0"><img src="${path}?t=${Date.now()}" alt="AI生成图片" style="max-width:100%;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.1)"><div style="margin-top:6px;font-size:12px;color:var(--text-muted)"><a href="${path}" download style="color:var(--primary)">下载图片</a></div></div>`);
+      placeholders.push(`<div style="margin:8px 0"><img src="${path}${path.includes('?')?'&':'?'}t=${Date.now()}" alt="AI生成图片" style="max-width:100%;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,.1)"><div style="margin-top:6px;font-size:12px;color:var(--text-muted)"><a href="${path}" ${path.startsWith('http')?'target="_blank"':'download'} style="color:var(--primary)}">${path.startsWith('http')?'查看原图':'下载图片'}</a></div></div>`);
       return `\x00IMG${idx}\x00`;
     });
     // 对剩余文本走正常转义+渲染
@@ -1563,7 +1591,7 @@ async function checkHealth(){
   if(r && r.status === 'ok'){
     dot.classList.remove('offline');
     txt.textContent = '运行中';
-    footer.innerHTML = `<span class="ver">SCU5.0</span><span>状态：运行中 · 余额 ${r.balance!=null?r.balance:'-'}E</span><span id="sidebarPairInfo" style="font-size:10px;color:var(--text-light);display:none;"></span>`;
+    footer.innerHTML = `<span class="ver">SCU6.0</span><span>状态：运行中 · 余额 ${r.balance!=null?r.balance:'-'}E</span><span id="sidebarPairInfo" style="font-size:10px;color:var(--text-light);display:none;"></span>`;
     // 恢复阴阳对子侧边栏信息（避免 footer 重建时丢失）
     if(_yinYangSidebarHtml){
       const si = document.getElementById('sidebarPairInfo');
@@ -1572,7 +1600,7 @@ async function checkHealth(){
   }else{
     dot.classList.add('offline');
     txt.textContent = '离线';
-    footer.innerHTML = `<span class="ver">SCU5.0</span><span style="color:var(--danger)">服务未连接</span>`;
+    footer.innerHTML = `<span class="ver">SCU6.0</span><span style="color:var(--danger)">服务未连接</span>`;
   }
 }
 
@@ -2490,6 +2518,130 @@ async function loadPairStatus(retry=0){
   }
 }
 
+// ─── 单元对生态系统（太极熵税模型）─────────────────────
+async function loadUnitPairStatus(){
+  const el = document.getElementById('upairIndicator');
+  const cnt = document.getElementById('upairCount');
+  const dot = document.getElementById('upairDot');
+  const energy = document.getElementById('upairEnergy');
+  const list = document.getElementById('upairList');
+  try {
+    const r = await api('/upair/status');
+    if(r.success && r.data){
+      const d = r.data;
+      if(d.enabled === false){
+        if(el) el.classList.add('off');
+        if(cnt) cnt.textContent = '未启用';
+        if(energy) energy.textContent = '势能 -';
+        if(list) list.innerHTML = '<div class="empty" style="padding:20px">单元对生态系统未启用</div>';
+        return;
+      }
+      if(el) el.classList.remove('off');
+      const alive = d.alive_pairs || 0;
+      const totalE = d.total_energy || 0;
+      const stab = d.avg_stability || 0;
+      if(cnt) cnt.textContent = alive + '对';
+      if(energy) energy.textContent = '势能 ' + totalE.toFixed(0) + 'E';
+      if(dot){
+        if(stab > 0.7) dot.className = 'pair-dot';
+        else if(stab > 0.4) dot.className = 'pair-dot pending';
+        else dot.className = 'pair-dot fail';
+      }
+      if(el) el.title = '单元对生态: ' + alive + '个存活\n总势能: ' + totalE.toFixed(1) + 'E\n平均稳定度: ' + stab.toFixed(4) + '\n回调已注册: ' + (d.callback_registered ? '是' : '否');
+      // 渲染对子列表
+      if(list && d.pairs){
+        if(d.pairs.length === 0){
+          list.innerHTML = '<div class="empty" style="padding:20px"><div class="empty-icon"></div>暂无存活对子，点击上方按钮诞生新对子</div>';
+        } else {
+          list.innerHTML = d.pairs.map(p => {
+            const t = p.tracker || {};
+            const bias = t.bias || 0;
+            const stabVal = t.stability || 0;
+            const eTotal = t.e_total || 0;
+            const biasColor = Math.abs(bias) < 0.3 ? 'var(--success)' : Math.abs(bias) < 0.6 ? 'var(--warning)' : 'var(--danger)';
+            const biasLabel = bias > 0.1 ? '偏阳' : bias < -0.1 ? '偏阴' : '中和';
+            const needCB = t.needs_callback ? '<span style="color:var(--warning);font-size:10px">·需回调</span>' : '';
+            return '<div style="padding:8px 12px;border-bottom:1px solid var(--border);font-size:12px">' +
+              '<div style="display:flex;justify-content:space-between;align-items:center">' +
+                '<span style="font-weight:500">' + (p.specialty||'general') + ' · ' + p.pair_id.substring(0,12) + '</span>' +
+                '<span style="color:var(--text-muted);font-size:11px">回调' + (p.callback_attempts||0) + '次 ' + needCB + '</span>' +
+              '</div>' +
+              '<div style="display:flex;gap:12px;margin-top:4px;color:var(--text-muted);font-size:11px">' +
+                '<span>势能: ' + eTotal.toFixed(1) + 'E</span>' +
+                '<span style="color:' + biasColor + '">偏度: ' + bias.toFixed(3) + '(' + biasLabel + ')</span>' +
+                '<span>稳定度: ' + stabVal.toFixed(3) + '</span>' +
+                '<span>阴: ' + (t.e_yin||0).toFixed(0) + '</span>' +
+                '<span>阳: ' + (t.e_yang||0).toFixed(0) + '</span>' +
+              '</div>' +
+            '</div>';
+          }).join('');
+        }
+      }
+    } else {
+      if(el) el.classList.add('off');
+      if(cnt) cnt.textContent = '离线';
+    }
+  } catch(e) {
+    if(el) el.classList.add('off');
+    if(cnt) cnt.textContent = '离线';
+  }
+}
+
+async function upairSpawn(specialty){
+  try {
+    const r = await api('/upair/spawn', {method:'POST', body:JSON.stringify({specialty, initial_energy:800})});
+    if(r.success){
+      showToast('诞生' + specialty + '对子成功: ' + r.data.pair_id.substring(0,8));
+      loadUnitPairStatus();
+    } else {
+      showToast('诞生失败: ' + (r.detail||'未知错误'), 'error');
+    }
+  } catch(e) { showToast('诞生异常: ' + e.message, 'error'); }
+}
+
+async function upairSynergy(){
+  try {
+    const r = await api('/upair/list');
+    if(!r.success || !r.data || r.data.count < 2){
+      showToast('需至少2个存活对子才能协同融合', 'error');
+      return;
+    }
+    const ids = r.data.pairs.slice(0,4).map(p => p.pair_id);
+    const res = await api('/upair/synergy', {method:'POST', body:JSON.stringify({pair_ids:ids})});
+    if(res.success){
+      showToast('协同融合: ' + res.data.message + ' (回充' + res.data.replenish + 'E)');
+      loadUnitPairStatus();
+    } else {
+      showToast('融合失败: ' + (res.data?.message||''), 'error');
+    }
+  } catch(e) { showToast('融合异常: ' + e.message, 'error'); }
+}
+
+async function upairCollect(){
+  try {
+    const r = await api('/upair/collect', {method:'POST'});
+    if(r.success){
+      const d = r.data;
+      showToast('经验回收: 回收' + d.collected + '个, experience_store=' + (d.stored_experience||0) + ', 知识库=' + (d.stored_knowledge||0));
+      loadUnitPairStatus();
+    }
+  } catch(e) { showToast('回收异常: ' + e.message, 'error'); }
+}
+
+async function upairDispatch(){
+  try {
+    const r = await api('/upair/dispatch', {method:'POST', body:JSON.stringify({subtasks:[
+      {subtask:'搜索AI最新进展', specialty:'search'},
+      {subtask:'分析AI趋势', specialty:'analysis'},
+      {subtask:'撰写AI报告', specialty:'writing'},
+    ]})});
+    if(r.success){
+      showToast('分工协作: ' + r.data.summary);
+      loadUnitPairStatus();
+    }
+  } catch(e) { showToast('协作异常: ' + e.message, 'error'); }
+}
+
 // ─── 🆕 阴阳对子思考状态（方案C） ─────────────────────────
 // 全局状态：标记阴阳对子是否激活 + 侧边栏信息HTML（避免被 loadPairStatus/checkHealth 覆盖）
 let _yinYangActive = false;
@@ -2807,6 +2959,8 @@ setInterval(checkHealth, 30000);
 setInterval(loadCufTopStatus, 15000);
 setInterval(loadPairStatus, 15000);
 setInterval(loadYinYangStatus, 15000);  // 阴阳对子状态也定期轮询，防止被 loadPairStatus/checkHealth 覆盖
+loadUnitPairStatus();
+setInterval(loadUnitPairStatus, 15000);  // 单元对生态系统状态定期轮询
 setInterval(loadLocalBackends, 30000);
 // Mermaid 初始化（用于执行流可视化 & Agent 协作图）
 // 黑白主题：与整体 UI 设计令牌统一（白底/黑边/黑字/灰次级）

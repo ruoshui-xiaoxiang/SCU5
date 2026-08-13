@@ -125,10 +125,10 @@ export SCU3_ADMIN_API_KEY=<你的强管理员密钥>
 
 ```powershell
 # Windows 权限设置
-$acl = Get-Acl "C:\path\to\SCU4\SCU3_data\screenshots"
+$acl = Get-Acl "C:\path\to\SCU5\SCU3_data\screenshots"
 $rule = New-Object System.Security.AccessControl.FileSystemAccessRule("Users","FullControl","ContainerInherit,ObjectInherit","None","Allow")
 $acl.AddAccessRule($rule)
-Set-Acl -Path "C:\path\to\SCU4\SCU3_data\screenshots" -AclObject $acl
+Set-Acl -Path "C:\path\to\SCU5\SCU3_data\screenshots" -AclObject $acl
 ```
 
 ### 4.3 VL 模型显存限制（注意）

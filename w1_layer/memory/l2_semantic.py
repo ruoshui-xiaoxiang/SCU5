@@ -126,15 +126,18 @@ class L2SemanticStore:
 
         results: List[Dict[str, Any]] = []
 
-        # 通道 1: VectorKnowledgeStore（FAISS+SBERT）
+        # 通道 1: VectorKnowledgeStore（FAISS+SBERT，SCU5.1优化：category过滤+语义增强）
         if self._vector_store is not None:
             try:
-                hits = self._vector_store.search(query, top_k=top_k * 2)
+                hits = self._vector_store.search(query, top_k=top_k * 3)
                 for hit in hits:
                     meta = hit.get("metadata", {})
                     item_id = meta.get("id", "")
                     if item_id and item_id in self._items:
                         item = self._items[item_id]
+                        # SCU5.1：category 过滤（限制5），向量检索结果按 category 精确过滤
+                        if category and item.category != category:
+                            continue
                         results.append({
                             "id": item.id,
                             "timestamp": item.timestamp,
@@ -148,13 +151,24 @@ class L2SemanticStore:
             except Exception as e:
                 logger.warning(f"L2 向量检索失败: {e}")
 
-        # 通道 2: TF-IDF
-        if not results and self._backend == "tfidf" and self._tfidf_vectorizer is not None:
-            results = self._tfidf_search(query, candidates, top_k)
+        # 通道 2: TF-IDF（SCU5.1：向量结果不足时补充，限制5）
+        if len(results) < top_k and self._backend == "tfidf" and self._tfidf_vectorizer is not None:
+            tfidf_results = self._tfidf_search(query, candidates, top_k)
+            # 去重合并
+            _existing_ids = {r["id"] for r in results}
+            for r in tfidf_results:
+                if r["id"] not in _existing_ids:
+                    results.append(r)
+                    _existing_ids.add(r["id"])
 
-        # 通道 3: 关键词匹配（兜底）
-        if not results:
-            results = self._keyword_search(query, candidates, top_k)
+        # 通道 3: 关键词匹配（兜底，SCU5.1：结果不足时补充）
+        if len(results) < top_k:
+            kw_results = self._keyword_search(query, candidates, top_k)
+            _existing_ids = {r["id"] for r in results}
+            for r in kw_results:
+                if r["id"] not in _existing_ids:
+                    results.append(r)
+                    _existing_ids.add(r["id"])
 
         return results[:top_k]
 

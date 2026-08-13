@@ -54,6 +54,12 @@ class MetacognitionLayer:
             merged["llm_mode"] = business_ctx["llm_mode"]
         if business_ctx.get("workflow_result"):
             merged["workflow_result"] = business_ctx["workflow_result"]
+        # 方案B：透传对子扣税信息（供前端展示对子状态变化）
+        if business_ctx.get("pair_charge"):
+            merged["pair_charge"] = business_ctx["pair_charge"]
+        # 方案2：透传双签回调标记
+        if business_ctx.get("pair_callback_triggered"):
+            merged["pair_callback_triggered"] = business_ctx["pair_callback_triggered"]
 
         # 业务侧主动拦截（如插件blocked）→ 设置blocked
         if business_ctx.get("blocked"):

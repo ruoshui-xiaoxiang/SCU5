@@ -236,3 +236,98 @@ def run_with_cuf_audit(guard: CUFGuard, tool_guard: ToolGuard,
         result["success"] = True
         result["execution_time"] = time.time() - start_time
     return result
+
+
+# ==================== SCU5.1：CUF 审计装饰器（限制2） ====================
+
+import functools
+import asyncio
+
+
+def cuf_audit(op_id: str = "", goal: str = "", subtasks_field: str = "tools"):
+    """CUF 审计装饰器（限制2）
+
+    自动为执行类端点接入 CUF 审批链路（守卫①→工具守卫→执行→守卫②），
+    替代手动调用 run_with_cuf_audit。
+
+    用法：
+        @router.post("/toolchain/execute")
+        @cuf_audit(op_id="toolchain", goal="多工具链式执行")
+        async def toolchain_execute(req, api_key=...):
+            ...
+
+    装饰器会：
+    1. 从 api.deps 获取 guard/tool_guard 单例
+    2. 从请求体的 subtasks_field 字段提取子任务（默认 tools）
+    3. 将原函数作为 execute_fn 包装进 run_with_cuf_audit
+    4. 自动用 asyncio.to_thread 异步执行（避免阻塞事件循环）
+
+    Args:
+        op_id: 操作ID（空则用函数名）
+        goal: 工作流目标（空则用函数 docstring 首行）
+        subtasks_field: 请求体中子任务列表的字段名
+    """
+    def decorator(func):
+        _op_id = op_id or f"cuf_{func.__name__}"
+        _goal = goal or (func.__doc__.strip().split(chr(10))[0] if func.__doc__ else func.__name__)
+
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            # 从 api.deps 获取 guard/tool_guard（延迟导入避免循环依赖）
+            try:
+                from api.deps import get
+                _guard = get("guard")
+                _tool_guard = get("tool_guard")
+            except Exception:
+                _guard = None
+                _tool_guard = None
+
+            # 如果 guard 未就绪（启动早期或未注入），直接执行原函数（降级）
+            if _guard is None or _tool_guard is None:
+                return await _call_original(func, args, kwargs)
+
+            # 从请求参数提取子任务（FastAPI 端点的第一个位置参数通常是 req）
+            subtasks = []
+            for a in args:
+                if hasattr(a, subtasks_field) or hasattr(a, "model_dump"):
+                    try:
+                        data = a.model_dump() if hasattr(a, "model_dump") else a.__dict__
+                        raw = data.get(subtasks_field, [])
+                        if isinstance(raw, list):
+                            subtasks = [{"tool": str(s), "specialty": "general"} for s in raw]
+                    except Exception:
+                        pass
+                    break
+
+            # 同步执行函数（原端点可能是 async 或 sync，统一提取为同步 execute_fn）
+            def execute_fn():
+                import inspect
+                if inspect.iscoroutinefunction(func):
+                    # async 端点：在新事件循环中执行
+                    loop = asyncio.new_event_loop()
+                    try:
+                        return loop.run_until_complete(func(*args, **kwargs))
+                    finally:
+                        loop.close()
+                else:
+                    return func(*args, **kwargs)
+
+            # 用 run_with_cuf_audit 包装执行（异步，避免阻塞）
+            result = await asyncio.to_thread(
+                run_with_cuf_audit,
+                guard=_guard, tool_guard=_tool_guard,
+                op_id=_op_id, goal=_goal,
+                subtasks=subtasks, execute_fn=execute_fn,
+            )
+            return result
+
+        return wrapper
+    return decorator
+
+
+async def _call_original(func, args, kwargs):
+    """降级：guard 未就绪时直接调用原函数"""
+    import inspect
+    if inspect.iscoroutinefunction(func):
+        return await func(*args, **kwargs)
+    return func(*args, **kwargs)

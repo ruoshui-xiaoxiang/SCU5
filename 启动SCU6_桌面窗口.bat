@@ -1,6 +1,6 @@
 @echo off
 cd /d "%~dp0"
-title SCU5 WebView
+title SCU6 WebView
 setlocal
 
 set "TRAE_PY=C:\Users\若水\AppData\Roaming\TRAE SOLO CN\ModularData\ai-agent\vm\tools\python\python.exe"
@@ -17,7 +17,7 @@ if "%PY_EXE%"=="" (
 )
 
 echo ============================================================
-echo   SCU5 Desktop (WebView)
+echo   SCU6 Desktop (WebView)
 echo   Python : %PY_EXE%
 echo ============================================================
 echo.
@@ -30,3 +30,4 @@ if errorlevel 1 (
     echo [ERROR] Startup failed
     pause
 )
+

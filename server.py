@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-SCU3 - 标准计算单元3 · 主入口
+SCU6 - 标准计算单元6 · 主入口
 ===============================
 基于 v3 架构：三维度分离
   数据流：感知(W2) → 记忆(W1) → 执行(W1) → 认知(M) → 元认知(M) → 输出
@@ -8,6 +8,10 @@ SCU3 - 标准计算单元3 · 主入口
 """
 import os
 import sys
+# SBERT 离线加载（避免 HuggingFace 网络超时）
+os.environ.setdefault("HF_HUB_OFFLINE", "1")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
 import time
 import uuid
 import logging
@@ -92,7 +96,16 @@ code_modifier = init_code_modifier(
     require_human_approval=True,
 )
 
-app = FastAPI(title="标准计算单元3 SCU3", version="3.0.0")
+app = FastAPI(title="标准计算单元6 SCU6", version="6.0.0")
+
+# ─── SCU5.1 统一中间件注册（限制1/3） ────────────────────
+from api.middleware import (
+    PathValidationMiddleware,
+    LoopMonitorMiddleware,
+    get_loop_monitor,
+)
+app.add_middleware(PathValidationMiddleware)
+app.add_middleware(LoopMonitorMiddleware)
 
 # 挂载静态文件目录（exports/images 等生成的文件可通过 /exports/ 访问）
 from fastapi.staticfiles import StaticFiles
@@ -128,6 +141,7 @@ from api.local_model import router as _local_model_router
 from api.browser import router as _browser_router
 from api.integrations import router as _integrations_router
 from api.misc import router as _misc_router
+from api.pair import router as pair_router
 app.include_router(_ledger_router)
 app.include_router(_system_router)
 app.include_router(_mcp_router)
@@ -152,6 +166,7 @@ app.include_router(_local_model_router)
 app.include_router(_browser_router)
 app.include_router(_integrations_router)
 app.include_router(_misc_router)
+app.include_router(pair_router)
 
 
 # ─── C4修复：API Key 认证中间件 ────────────────────────────────
@@ -354,7 +369,6 @@ def process_request(prompt: str, user_id: str = "default_user") -> Dict[str, Any
         try:
             import urllib.request as _urq
             import hashlib as _hl
-            os.makedirs(os.path.join(BASE_DIR, "exports", "images"), exist_ok=True)
             img_prompt = prompt
             # 移除命令式前缀（"生成图片："、"画一张"等），提取实际描述
             import re as _re_img
@@ -371,18 +385,26 @@ def process_request(prompt: str, user_id: str = "default_user") -> Dict[str, Any
             with _urq.urlopen(req_obj, timeout=60) as resp:
                 img_data = resp.read()
 
-            name_hash = _hl.md5(f"{img_prompt}{seed}".encode()).hexdigest()[:8]
-            fname = f"gen_{name_hash}.png"
-            fpath = os.path.join(BASE_DIR, "exports", "images", fname)
-            with open(fpath, "wb") as f:
-                f.write(img_data)
+            # 尝试保存到本地（失败时降级为在线URL，不中断图片返回）
+            img_path_url = img_url  # 默认使用在线URL
+            _saved_local = False
+            try:
+                os.makedirs(os.path.join(BASE_DIR, "exports", "images"), exist_ok=True)
+                name_hash = _hl.md5(f"{img_prompt}{seed}".encode()).hexdigest()[:8]
+                fname = f"gen_{name_hash}.png"
+                fpath = os.path.join(BASE_DIR, "exports", "images", fname)
+                with open(fpath, "wb") as f:
+                    f.write(img_data)
+                img_path_url = f"/exports/images/{fname}"
+                _saved_local = True
+                logger.info(f"图片生成成功(本地): {fname}, {len(img_data)} bytes")
+            except Exception as save_err:
+                logger.warning(f"图片本地保存失败，使用在线URL: {save_err}")
 
-            img_path_url = f"/exports/images/{fname}"
-            ctx["response"] = f"[IMAGE]{img_path_url}[/IMAGE]\n已根据您的描述生成图片：{img_prompt}\n图片已保存到 exports/images/{fname}"
+            ctx["response"] = f"[IMAGE]{img_path_url}[/IMAGE]\n已根据您的描述生成图片：{img_prompt}"
             ctx["cognition_ok"] = True
             ctx["llm_mode"] = "image_generation"
-            ctx["image_generated"] = {"path": img_path_url, "prompt": img_prompt, "bytes": len(img_data)}
-            logger.info(f"图片生成成功: {fname}, {len(img_data)} bytes")
+            ctx["image_generated"] = {"path": img_path_url, "prompt": img_prompt, "bytes": len(img_data), "saved_local": _saved_local}
 
             merged = metacog.merge(ctx, cuf_traces, op_id)
             return _build_response(merged, op_id, start)
@@ -585,6 +607,17 @@ def process_request(prompt: str, user_id: str = "default_user") -> Dict[str, Any
     except Exception as e:
         logger.debug(f"存储对话历史失败: {e}")
 
+    # 同步写入 conversation_context（让 get_history_for_llm 能拿到历史，支持 LLM 兜底追问识别）
+    try:
+        from m_layer.conversation_context import get_conversation_manager
+        _cm = get_conversation_manager()
+        _sessions = _cm.list_sessions(user_id, limit=1)
+        _sid = _sessions[0]["session_id"] if _sessions else _cm.create_session(user_id)
+        _cm.add_message(_sid, "user", prompt)
+        _cm.add_message(_sid, "assistant", merged.get("response", ""))
+    except Exception as e:
+        logger.debug(f"写入conversation_context失败（不阻塞）: {e}")
+
     return _build_response(merged, op_id, start)
 
 
@@ -763,6 +796,12 @@ def _build_response(merged: Dict, op_id: str, start: datetime) -> Dict[str, Any]
         resp["llm_mode"] = merged["llm_mode"]
     if merged.get("workflow_result"):
         resp["workflow_result"] = merged["workflow_result"]
+    # 方案B：透传对子扣税信息（供前端顶栏展示对子状态变化）
+    if merged.get("pair_charge"):
+        resp["pair_charge"] = merged["pair_charge"]
+    # 方案2：透传双签回调标记
+    if merged.get("pair_callback_triggered"):
+        resp["pair_callback_triggered"] = merged["pair_callback_triggered"]
     return resp
 
 
@@ -1044,6 +1083,13 @@ class VoiceListenStartRequest(PydanticModel):
 @app.on_event("startup")
 async def _register_modules_on_startup():
     """启动时注册内置功能模块到注册表 + 启动周期审计定时器 + D层完整性校验"""
+    # SCU5.1：启动事件循环监控探针（限制3）
+    try:
+        import asyncio as _asyncio
+        get_loop_monitor().start(_asyncio.get_running_loop())
+    except Exception as _e:
+        logger.warning(f"事件循环监控探针启动失败: {_e}")
+
     # 注入全局单例到 api.deps（供 api/*.py 的路由访问）
     _api_set_globals(
         ledger=ledger,
@@ -1140,7 +1186,7 @@ async def _register_modules_on_startup():
 
 @app.on_event("shutdown")
 async def _graceful_shutdown():
-    """优雅关闭：通知周期审计线程退出"""
+    """优雅关闭：通知周期审计线程退出 + 停止事件循环监控探针"""
     try:
         stop_evt = getattr(app.state, "audit_stop_event", None)
         if stop_evt is not None:
@@ -1148,6 +1194,12 @@ async def _graceful_shutdown():
             logger.info("已通知周期审计线程停止")
     except Exception as e:
         logger.warning(f"shutdown 钩子异常: {e}")
+    # SCU5.1：停止事件循环监控探针（限制3）
+    try:
+        get_loop_monitor().stop()
+        logger.info("事件循环监控探针已停止")
+    except Exception as e:
+        logger.warning(f"事件循环监控探针停止异常: {e}")
 
 
 # ─── 前端补全端点（favicon + 别名 + 功能桩） ────────────────────────────────
@@ -1197,7 +1249,7 @@ _SIZE_MAP = {
 # ─── 图片对话（VL模型） ────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-    logger.info("🚀 标准计算单元3 SCU3 启动 (v3 架构 + Agent能力)")
+    logger.info("🚀 标准计算单元6 SCU6 启动 (v6 架构 + Agent能力 + 太极熵税对子)")
 
     # 安全告警：使用默认Key时显著提示
     _get_configured_api_key()  # 触发标记

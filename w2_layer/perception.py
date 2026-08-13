@@ -21,6 +21,31 @@ logger = logging.getLogger("SCU3.w2.perception")
 _MAX_INPUT_LEN = 5000
 
 
+
+# ==================== SCU5.1：意图路由配置化（限制8） ====================
+import json as _json
+import os as _os
+
+_INTENT_CONFIG_PATH = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "config", "intent_routes.json")
+_INTENT_CONFIG_CACHE = None
+
+
+def _load_intent_config():
+    """加载意图路由配置（带缓存，文件变更时自动重载）"""
+    global _INTENT_CONFIG_CACHE
+    try:
+        mtime = _os.path.getmtime(_INTENT_CONFIG_PATH)
+        if _INTENT_CONFIG_CACHE and _INTENT_CONFIG_CACHE.get("_mtime") == mtime:
+            return _INTENT_CONFIG_CACHE
+        with open(_INTENT_CONFIG_PATH, "r", encoding="utf-8") as f:
+            cfg = _json.load(f)
+        cfg["_mtime"] = mtime
+        _INTENT_CONFIG_CACHE = cfg
+        return cfg
+    except Exception:
+        return None
+
+
 class PerceptionLayer(PerceivableMixin, SanitizableMixin):
     """感知层 — 输入解析、清洗、脱敏与意图识别
 
@@ -218,76 +243,63 @@ class PerceptionLayer(PerceivableMixin, SanitizableMixin):
             return "general"
 
     def _detect_intent(self, text: str, history: list = None) -> str:
-        """意图识别（含插件市场触发意图、工作流自动触发）"""
-        # 优先级最高：追问/修正意图检测（依赖对话历史，不触发独立搜索）
-        # 解决多轮对话中代词式查询（"刚才/再详细/不是这个"）被误判为独立搜索的问题
-        if re.search(
-            r"我刚才|刚才那个|刚才问的|刚才说的|上面.*提到|前文|上一个|"
-            r"再详细|再深入|再解释|详细解释|深入分析|展开说|继续说|接着说|"
-            r"不是这个|不对|不是.*意思|换个|另一个方面|另一方面|"
-            r"反对.*理由|支持.*理由|这个方案|你.*说的|你.*提到|你的.*回答|"
-            r"基于.*刚才|基于.*上面|基于.*前文",
-            text, re.I
-        ):
-            return "followup"
+        """意图识别（全配置化 + LLM兜底，零硬编码正则）
 
-        # ══ 工作流自动触发（优先级仅次于followup）══
-        # 强信号词直接路由到对应预置工作流；宽松动词（"分析一下"等）默认走 research_report
-        # 注意：必须在 analytical 之前判断，否则"分析"类词会被 analytical 吞掉
-        wf_intent = self._detect_workflow_intent(text)
+        流程：
+        1. followup 正则预筛（读配置）→ 命中且有历史 → followup
+        2. workflow 触发检测（读配置）
+        3. analytical 意图（读配置）
+        4. 其他确定性意图遍历（读配置）
+        5. 领域检测 → web_search
+        6. web_search 意图（读配置）
+        7. LLM 兜底：conversation + 有历史 → 判断是否追问
+        """
+        _cfg = _load_intent_config()
+
+        # ① followup 正则预筛（读配置，命中且有历史才生效）
+        if _cfg and "followup" in _cfg.get("rules", {}):
+            _fu_pat = _cfg["rules"]["followup"].get("pattern", "")
+            if _fu_pat and re.search(_fu_pat, text, re.I) and history:
+                logger.info(f"followup正则命中: text={text[:40]}")
+                return "followup"
+
+        # ② 工作流自动触发（读配置）
+        wf_intent = self._detect_workflow_intent(text, history)
         if wf_intent:
             return wf_intent
 
-        # 分析/批判类意图检测（优先于knowledge_query，引导深度分析）
-        # 解决"分析潜在假设"等批判性查询被default prompt处理导致深度不足的问题
-        # 方案C：扩展识别模式，让"分析XX的可能性/可行性/影响/原因/趋势/前景"触发阴阳对子思考
-        if re.search(
-            r"分析.*假设|潜在.*假设|批判|反思|反驳|论证|"
-            r"逻辑.*漏洞|推理|辩证|第一性原理|苏格拉底|"
-            r"反对.*理由|支持.*理由|利弊分析|优缺点分析|对比.*分析|"
-            r"分析.*(?:可能性|可行性|影响|原因|趋势|前景|利弊|优缺点|风险|机会|本质|原理|影响)",
-            text, re.I
-        ):
-            return "analytical"
+        # ③ analytical 意图（读配置）
+        if _cfg and "analytical" in _cfg.get("rules", {}):
+            _patterns = _cfg["rules"]["analytical"].get("patterns", [])
+            for _p in _patterns:
+                if _p and re.search(_p, text, re.I):
+                    logger.info(f"分析型意图触发(对子思考): text={text[:40]}")
+                    return "analytical"
 
-        if re.search(r"计算|算一下|calc|=", text, re.I):
-            return "calculate"
-        if re.search(r"天气|气温|weather", text, re.I):
-            return "weather"
-        if re.search(r"几点|时间|now|time", text, re.I):
-            return "time"
-        if re.search(r"统计|字数", text, re.I):
-            return "text_stats"
-        # 文档读取意图（需插件市场）
-        if re.search(r"\.pdf|读取pdf|解析pdf|pdf内容|read pdf", text, re.I):
-            return "document_read"
-        if re.search(r"\.docx?|读取word|读取docx|解析word|read docx", text, re.I):
-            return "document_read"
-        if re.search(r"\.xlsx?|读取excel|解析xlsx|读取表格|read excel", text, re.I):
-            return "document_read"
-        # 翻译意图（需插件市场）
-        if re.search(r"翻译|translate|英文翻译|中文翻译", text, re.I):
-            return "translate"
-        # 二维码意图（需插件市场）
-        if re.search(r"二维码|qrcode|生成码", text, re.I):
-            return "qrcode"
-        # 图片生成意图（AI文生图）
-        if re.search(r"生成.*图片|画.*张|画.*幅|画.*个|生成.*图|创建.*图片|制作.*图片|画.*图|draw|generate.*image|文生图|AI画", text, re.I):
-            return "image_generation"
-        # 图片处理意图（需插件市场）
-        if re.search(r"处理图片|缩放图片|裁剪图片|图片转格式|image process|\.(?:png|jpg|jpeg|gif|bmp)", text, re.I):
-            return "image_process"
-        # Markdown 渲染意图（需插件市场）
-        if re.search(r"渲染markdown|md转|markdown转|渲染md", text, re.I):
-            return "md_render"
-        if re.search(r"你好|hello|hi|介绍", text, re.I):
-            return "greeting"
-        # 本地知识查询：含项目专属词（SCU3/CUF/架构/守卫/三级记忆等）→ 走 RAG 知识库
-        # 这类问题本地知识库有权威答案，不应优先联网
-        if re.search(r"SCU3|CUF|本系统|本程序|本架构|三级记忆|L1|L2|L3|守卫|D层|M层|W1|W2|熵税|阴阳|Pair|自进化|自修改|插件市场|向量库", text, re.I):
-            return "knowledge_query"
-        # 领域触发词自动成为 web_search 意图触发词
-        # 这样"酒店/住宿/宾馆"等高意图词无需搜索动词也能触发联网搜索
+        # ④ 配置化意图遍历（calculate/weather/time/text_stats/document_read/
+        #    translate/qrcode/image_generation/image_process/md_render/
+        #    greeting/knowledge_query）
+        if _cfg:
+            _order = _cfg.get("intent_order", [])
+            _rules = _cfg.get("rules", {})
+            _skip = {"followup", "workflow", "analytical",
+                     "web_search", "web_search_domain", "conversation"}
+            for _intent_name in _order:
+                if _intent_name in _skip:
+                    continue
+                _rule = _rules.get(_intent_name)
+                if not _rule:
+                    continue
+                _pats = list(_rule.get("patterns", []) or [])
+                if not _pats:
+                    _single = _rule.get("pattern", "")
+                    if _single:
+                        _pats = [_single]
+                for _p in _pats:
+                    if _p and re.search(_p, text, re.I):
+                        return _rule.get("intent", _intent_name)
+
+        # ⑤ 领域触发词 → web_search
         try:
             from domain_router import detect_domain
             detected_domain = detect_domain(text)
@@ -295,10 +307,76 @@ class PerceptionLayer(PerceivableMixin, SanitizableMixin):
                 return "web_search"
         except Exception:
             pass
-        # 联网搜索意图：搜索/搜一下/查一下/最新/新闻/近期/2024/2025/2026/怎么样/是什么/是谁/多少钱/发生
-        if re.search(r"搜索|搜一下|搜搜|查一下|查查|帮我查|search|google一下|百度一下|最新|最近|今日|今天.*新闻|近期|2024|2025|2026|现在是.*年|怎么样|是什么|是谁|多少钱|发生.*事|热点|热搜", text, re.I):
-            return "web_search"
+
+        # ⑥ web_search 意图（读配置）
+        if _cfg and "web_search" in _cfg.get("rules", {}):
+            _ws_pat = _cfg["rules"]["web_search"].get("pattern", "")
+            if _ws_pat and re.search(_ws_pat, text, re.I):
+                return "web_search"
+
+        # ⑦ LLM 兜底：conversation + 有历史 → 判断是否追问
+        # 覆盖正则无法穷举的代词/省略句（"能给个例子吗"、"北京的呢"）
+        _fu_cfg = _cfg.get("followup_llm", {}) if _cfg else {}
+        if (_fu_cfg.get("enabled", False) and history
+                and len(history) >= _fu_cfg.get("min_history", 1)
+                and len(text) >= _fu_cfg.get("min_text_length", 3)):
+            llm_followup = self._detect_followup_llm(text, history)
+            if llm_followup:
+                logger.info(f"LLM兜底识别追问: text={text[:40]}")
+                return "followup"
+
         return "conversation"
+
+    def _detect_followup_llm(self, text: str, history: list) -> bool:
+        """LLM 兜底判断：当前输入是否是对话历史的追问
+
+        覆盖正则无法穷举的代词/省略句（"能给个例子吗"、"北京的呢"、"它怎么样"）。
+        仅在意图为 conversation 且有对话历史时调用（由 _detect_intent 末尾触发）。
+        """
+        if not history:
+            return False
+
+        # 构建历史上下文（最近2轮）
+        recent = history[-4:] if len(history) >= 4 else history
+        history_text = ""
+        for msg in recent:
+            role = msg.get("role", "")
+            content = msg.get("content", "")[:150]
+            if role and content:
+                label = "用户" if role == "user" else "助手"
+                history_text += f"{label}: {content}\n"
+
+        system_prompt = (
+            "判断用户当前输入是否是在追问上文，还是开启了新话题。\n\n"
+            "判断标准：\n"
+            "✓ 是追问：输入较短、含代词(它/这个/那个/这种)、省略主语、"
+            "要求举例/详细/对比/优缺点、指代前文内容\n"
+            "✗ 是新话题：输入是完整的新问题、与前文无关\n\n"
+            "只返回JSON：{\"is_followup\": true} 或 {\"is_followup\": false}"
+        )
+        user_prompt = f"对话历史:\n{history_text}\n当前输入: {text}\n\n请判断:"
+
+        try:
+            from m_layer.llm_client import get_client
+            client = get_client()
+            result = client.chat(
+                prompt=user_prompt,
+                system_prompt=system_prompt,
+                temperature=0.1,
+                max_tokens=50,
+            )
+            if result.get("error"):
+                return False
+            content = result.get("content", "").strip()
+            if content.startswith("```"):
+                content = re.sub(r"^```(?:json)?\s*", "", content)
+                content = re.sub(r"\s*```$", "", content)
+            import json
+            data = json.loads(content)
+            return bool(data.get("is_followup", False))
+        except Exception as e:
+            logger.debug(f"LLM追问判断异常(降级到conversation): {e}")
+            return False
 
     # ═══════════════════════════════════════════════════════════
     #  工作流自动触发意图识别
@@ -310,73 +388,61 @@ class PerceptionLayer(PerceivableMixin, SanitizableMixin):
     #   ③ 边界：纯动词无主题词不触发（如"分析一下"无后续内容），避免空跑
     # 返回 "workflow:<preset_id>" 或 None
 
-    # 强信号词表（preset_id → 触发正则）
-    WORKFLOW_STRONG_SIGNALS = {
-        "research_report": r"深度研究|研究报告|全面调研|深度调研|专题研究|研究一下|调研一下|深入调研",
-        "code_solution": r"完整代码方案|代码方案|实现方案|技术方案|写个方案|给个方案|完整方案",
-        "decision_analysis": r"决策分析|帮我决策|帮我做决定|决策一下|决定一下|帮我选择|选择分析",
-        "content_creation": r"创作一篇|写一篇.{0,4}文章|写篇文章|创作内容|写一篇.{0,4}文案|写个文案",
-        "bug_investigation": r"排查bug|调试问题|排查问题|bug排查|调试bug|定位bug|排查一下",
-        "learning_path": r"学习路径|学习路线|系统学习|学习计划|学习规划|怎么学|学习指南",
-    }
-
-    # 宽松动词：+ 主题词（≥2个非动词字符）→ 默认 research_report
-    # 覆盖"分析一下XX"、"研究XX"、"写一下XX"等泛化表达
-    WORKFLOW_LOOSE_VERBS = r"分析一下|研究一下|调研一下|写一下|了解一下|梳理一下|梳理下|整理一下|整理下|探讨一下|讨论一下"
-
     def _detect_workflow_intent(self, text: str, history: list = None) -> str:
         """识别工作流触发意图，返回 'workflow:<preset_id>' 或 ''
 
-        三层触发策略：
-        ① 强信号词精确路由（零成本，零延迟）
-        ② 宽松动词 + 主题词 → research_report（零成本，零延迟）
-        ③ LLM 完整语义推理（正则未命中时兜底，支持纯主题输入如"Python异步编程的优势"）
+        全配置化三层触发策略（零硬编码）：
+        ① 强信号词精确路由（读配置 workflow.strong_signals）
+        ② 宽松动词 + 主题词 → research_report（读配置 workflow.loose_verbs + short_circuits）
+        ③ LLM 完整语义推理（正则未命中时兜底）
         """
         text = text.strip()
         if not text or len(text) < 4:
             return ""
 
-        # ① 强信号词精确路由
-        for preset_id, pattern in self.WORKFLOW_STRONG_SIGNALS.items():
-            if re.search(pattern, text, re.I):
+        _cfg = _load_intent_config()
+        _wf_cfg = _cfg.get("workflow", {}) if _cfg else {}
+        _shorts = _wf_cfg.get("short_circuits", {})
+
+        # ① 强信号词精确路由（读配置）
+        for preset_id, pattern in _wf_cfg.get("strong_signals", {}).items():
+            if pattern and re.search(pattern, text, re.I):
                 logger.info(f"工作流强信号触发: preset={preset_id}, text={text[:40]}")
                 return f"workflow:{preset_id}"
 
-        # ② 宽松动词 + 主题词 → research_report（最通用）
-        # 提取动词后的主题（去掉动词前缀和语气词），主题长度≥2才触发
-        m = re.search(rf"(?:{self.WORKFLOW_LOOSE_VERBS})(.+)", text, re.I)
-        if m:
-            topic = m.group(1).strip()
-            # 去除"的/了/吧/呢/啊"等语气词后的有效主题
-            topic = re.sub(r"^[的了吧呢啊哈]+", "", topic).strip()
-            if len(topic) >= 2:
-                logger.info(f"工作流宽松触发: preset=research_report, topic={topic[:30]}, text={text[:40]}")
-                return "workflow:research_report"
+        # ② 宽松动词 + 主题词 → research_report（读配置）
+        _loose_verbs = _wf_cfg.get("loose_verbs", "")
+        if _loose_verbs:
+            m = re.search(rf"(?:{_loose_verbs})(.+)", text, re.I)
+            if m:
+                topic = m.group(1).strip()
+                topic = re.sub(r"^[的了吧呢啊哈]+", "", topic).strip()
+                if len(topic) >= 2:
+                    # analytical 主题短路（读配置）
+                    _at_pat = _shorts.get("analytical_topic", {}).get("pattern", "")
+                    if _at_pat and re.search(_at_pat, topic, re.I):
+                        logger.info(f"分析型主题短路(不走工作流): topic={topic[:30]}, text={text[:40]}")
+                        return ""
+                    logger.info(f"工作流宽松触发: preset=research_report, topic={topic[:30]}, text={text[:40]}")
+                    return "workflow:research_report"
 
-        # ②.5 分析型问题短路：不走工作流，交给阴阳对子思考处理
-        # 必须在LLM语义推理之前，否则LLM会把分析型问题判定为research_report
-        if re.search(
-            r"分析.*假设|潜在.*假设|批判|反思|反驳|论证|"
-            r"逻辑.*漏洞|推理|辩证|第一性原理|苏格拉底|"
-            r"反对.*理由|支持.*理由|利弊分析|优缺点分析|对比.*分析|"
-            r"分析.*(?:可能性|可行性|影响|原因|趋势|前景|利弊|优缺点|风险|机会|本质|原理|影响)",
-            text, re.I
-        ):
-            logger.info(f"分析型问题短路(不走工作流): text={text[:40]}")
+        # ②.5 分析型问题短路（读配置）
+        _an_sc = _shorts.get("analytical", {})
+        for _p in _an_sc.get("patterns", []):
+            if _p and re.search(_p, text, re.I):
+                logger.info(f"分析型问题短路(不走工作流): text={text[:40]}")
+                return ""
+
+        # ②.6 知识库查询短路（读配置）
+        _kn_pat = _shorts.get("knowledge", {}).get("pattern", "")
+        if _kn_pat and re.search(_kn_pat, text, re.I):
+            logger.info(f"知识库查询短路(不走工作流): text={text[:40]}")
             return ""
 
-        # ②.6 知识库查询短路：项目内部问题优先走RAG，不走工作流
-        # LLM会把"修复了哪些漏洞"误判为research_report，但这类问题应查知识库
-        if re.search(
-            r"SCU\d|修复了哪些|修复了什么|哪些安全漏洞|什么漏洞|"
-            r"对子思考.*根因|对子思考.*触发|对子.*修复|"
-            r"修复逻辑|修复方案|处理日志|分析报告|优化报告|"
-            r"CUF.*审计|熵税|账本|D层.*校验|"
-            r"哪些.*(?:功能|问题|漏洞|修复|端点|模块|能力)|"
-            r"什么.*(?:问题|漏洞|修复|功能|能力|模块)",
-            text, re.I
-        ):
-            logger.info(f"知识库查询短路(不走工作流): text={text[:40]}")
+        # ②.7 联网搜索短路（读配置）
+        _ws_pat = _shorts.get("web_search", {}).get("pattern", "")
+        if _ws_pat and re.search(_ws_pat, text, re.I):
+            logger.info(f"联网搜索短路(不走工作流): text={text[:40]}")
             return ""
 
         # ③ LLM 完整语义推理（正则未命中兜底）
@@ -398,7 +464,9 @@ class PerceptionLayer(PerceivableMixin, SanitizableMixin):
 
     # 可用预置工作流（供 LLM 选择）
     AVAILABLE_PRESETS = ["research_report", "code_solution", "decision_analysis",
-                         "content_creation", "bug_investigation", "learning_path"]
+                         "content_creation", "bug_investigation", "learning_path",
+                         "product_prd", "project_plan", "data_analysis", "security_audit",
+                         "test_plan", "translation_review", "code_review", "competitor_analysis"]
 
     def _detect_workflow_intent_llm(self, text: str, history: list) -> str:
         """LLM 完整语义推理：判断是否需要工作流，返回 'workflow:<preset_id>' 或 ''
@@ -422,7 +490,15 @@ class PerceptionLayer(PerceivableMixin, SanitizableMixin):
             "- decision_analysis: 决策分析（需搜集信息+利弊分析+建议）\n"
             "- content_creation: 内容创作（需素材+撰写+润色）\n"
             "- bug_investigation: Bug排查（需搜索+定位+修复方案）\n"
-            "- learning_path: 学习路径规划（需资源+评估+计划）\n\n"
+            "- learning_path: 学习路径规划（需资源+评估+计划）\n"
+            "- product_prd: 产品需求文档PRD（需市场调研+需求提炼+文档生成）\n"
+            "- project_plan: 项目方案规划（需任务拆解+技术评估+计划输出）\n"
+            "- data_analysis: 数据分析报告（需数据收集+分析建模+报告生成）\n"
+            "- security_audit: 安全审计（需漏洞扫描+风险评估+审计报告）\n"
+            "- test_plan: 测试方案设计（需用例梳理+自动化设计+测试文档）\n"
+            "- translation_review: 翻译与审校（需初译+校对+润色定稿）\n"
+            "- code_review: 代码评审（需静态分析+架构评估+评审报告）\n"
+            "- competitor_analysis: 竞品分析（需竞品搜集+对比矩阵+分析报告）\n\n"
             "判断标准：\n"
             "✓ 需要：用户明确要求深度处理，或主题复杂需多步处理（如'Python异步编程的优势'需搜集+分析+撰写）\n"
             "✗ 不需要：追问/修正（'详细说说'、'再深入'）、简单问答（'你好'、'Python是什么'）、"

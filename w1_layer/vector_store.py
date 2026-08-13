@@ -35,8 +35,12 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VECTOR_INDEX_DIR = os.path.join(BASE_DIR, "SCU3_data", "knowledge", "vector_index")
 
 # 默认配置
-DEFAULT_EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
-DEFAULT_VECTOR_DIM = 384  # MiniLM-L12-v2 默认维度，运行时自动检测
+DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-zh-v1.5"  # 中文SOTA嵌入模型
+DEFAULT_VECTOR_DIM = 512  # bge-small-zh-v1.5 默认维度，运行时自动检测
+# SBERT 加载失败时的 fallback 模型列表（按优先级）
+SBERT_FALLBACK_MODELS = [
+    "paraphrase-multilingual-MiniLM-L12-v2",  # 多语言（已预下载）
+]
 DEFAULT_SIMILARITY_THRESHOLD = 0.3
 DEFAULT_VECTOR_WEIGHT = 0.7  # 向量相似度权重
 DEFAULT_KEYWORD_WEIGHT = 0.3  # 关键词匹配权重
@@ -172,17 +176,22 @@ class VectorKnowledgeStore(StatusableMixin, SearchableMixin):
 
     def _detect_backend(self) -> None:
         """自动检测可用后端，按优先级降级"""
-        # CPU 模式下 SBERT 不稳定（加载后约1-2分钟进程崩溃），强制降级到 sklearn
-        _cpu_only = os.environ.get("CUDA_VISIBLE_DEVICES", "") == ""
-        if _HAS_SBERT and not _cpu_only:
+        # 检测 GPU 可用性（用 torch.cuda.is_available 而非 CUDA_VISIBLE_DEVICES）
+        _has_gpu = False
+        if _HAS_SBERT:
+            try:
+                import torch
+                _has_gpu = torch.cuda.is_available()
+            except Exception:
+                _has_gpu = False
+
+        # SBERT 优先（GPU 加速更佳，CPU 模式也可用）
+        if _HAS_SBERT:
             self._embed_backend = "sbert"
-            logger.info("嵌入后端：sentence-transformers（GPU模式）")
-        elif _HAS_SKLEARN:
-            self._embed_backend = "sklearn"
-            if _cpu_only:
-                logger.info("嵌入后端：sklearn HashingVectorizer（CPU模式跳过SBERT避免崩溃）")
+            if _has_gpu:
+                logger.info("嵌入后端：sentence-transformers（GPU加速）")
             else:
-                logger.info("嵌入后端：sklearn HashingVectorizer")
+                logger.info("嵌入后端：sentence-transformers（CPU模式）")
         elif _HAS_SKLEARN:
             self._embed_backend = "sklearn"
             logger.info("嵌入后端：sklearn HashingVectorizer")
@@ -206,23 +215,30 @@ class VectorKnowledgeStore(StatusableMixin, SearchableMixin):
         # 嵌入后端初始化
         try:
             if self._embed_backend == "sbert":
-                # 优先尝试 CUDA，失败则降级 CPU（避免 GPU 上下文异常导致服务无法启动）
+                # 模型优先级：用户指定模型 > fallback 模型列表
+                model_candidates = [self.embedding_model_name] + [
+                    m for m in SBERT_FALLBACK_MODELS if m != self.embedding_model_name
+                ]
                 self._sbert_model = None
-                for _dev in ("cuda", "cpu"):
-                    try:
-                        self._sbert_model = SentenceTransformer(self.embedding_model_name, device=_dev)
-                        logger.info(f"SBERT 加载成功，device={_dev}")
+                for model_name in model_candidates:
+                    for _dev in ("cuda", "cpu"):
+                        try:
+                            self._sbert_model = SentenceTransformer(model_name, device=_dev)
+                            self.embedding_model_name = model_name
+                            logger.info(f"SBERT 加载成功: {model_name}, device={_dev}")
+                            break
+                        except Exception as _e:
+                            logger.warning(f"SBERT {model_name} device={_dev} 加载失败: {_e}")
+                            self._sbert_model = None
+                    if self._sbert_model is not None:
                         break
-                    except Exception as _e:
-                        logger.warning(f"SBERT device={_dev} 加载失败: {_e}")
-                        self._sbert_model = None
                 if self._sbert_model is None:
-                    raise RuntimeError("SBERT 所有 device 加载均失败")
+                    raise RuntimeError("SBERT 所有模型加载均失败")
                 # 自动检测维度
                 if self.vector_dim is None:
                     test_vec = self._sbert_model.encode("维度检测")
                     self.vector_dim = int(test_vec.shape[0]) if hasattr(test_vec, "shape") else DEFAULT_VECTOR_DIM
-                logger.info(f"SBERT模型加载完成，维度={self.vector_dim}")
+                logger.info(f"SBERT模型加载完成，模型={self.embedding_model_name}，维度={self.vector_dim}")
             elif self._embed_backend == "sklearn":
                 dim = self.vector_dim or DEFAULT_HASH_DIM
                 self._hashing_vectorizer = HashingVectorizer(
@@ -291,7 +307,8 @@ class VectorKnowledgeStore(StatusableMixin, SearchableMixin):
         if not text or not text.strip():
             return None
 
-        cache_key = self._text_hash(text)
+        # 缓存键加入后端+模型+维度，避免切换后端时旧缓存污染（维度不匹配导致崩溃）
+        cache_key = f"{self._embed_backend}:{self.embedding_model_name}:{self.vector_dim}:{self._text_hash(text)}"
         if cache_key in self._embeddings_cache:
             return self._embeddings_cache[cache_key]
 

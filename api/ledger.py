@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from api.middleware import run_sync
 from api.deps import verify_api_key, verify_admin_key, get
 
 logger = logging.getLogger("SCU3.api.ledger")
@@ -76,7 +77,7 @@ async def ledger_replenish(req: LedgerReplenishRequest,
     - 需 SCU3_ADMIN_API_KEY + SCU3_LEDGER_AUTH 双重鉴权
     """
     ledger = get("ledger")
-    ok, msg = ledger.replenish(req.amount, req.auth_token, req.reason)
+    ok, msg = await run_sync(ledger.replenish, req.amount, req.auth_token, req.reason)
     return JSONResponse({"success": ok, "message": msg,
                          "balance": round(ledger.balance(), 4)})
 

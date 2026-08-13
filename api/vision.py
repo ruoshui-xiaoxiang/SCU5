@@ -210,11 +210,17 @@ async def image_generate(req: dict, api_key: str = Depends(verify_api_key)):
     width, height = _SIZE_MAP.get(size_key, (1280, 720))
     backend = req.get("backend", "pollinations")
     save_dir = req.get("save_dir", "exports/images")
+    # 剥离冗余的 exports/ 前缀，避免 safe_join_path 拼接成 exports/exports/...
+    _strip = save_dir.replace("\\", "/").lstrip("/")
+    if _strip.startswith("exports/"):
+        save_dir = _strip[len("exports/"):]
+    elif _strip == "exports":
+        save_dir = ""
 
     # P0修复：限制 save_dir 在 exports/ 目录内，防止路径穿越写入系统任意位置
     from w1_layer.path_utils import safe_join_path
     exports_root = os.path.join(BASE_DIR, "exports")
-    save_path = safe_join_path(save_dir, exports_root)
+    save_path = safe_join_path(save_dir, exports_root) if save_dir else exports_root
     if save_path is None:
         logger.warning(f"拒绝写入越界目录: {save_dir}")
         return JSONResponse(
@@ -247,22 +253,30 @@ async def image_generate(req: dict, api_key: str = Depends(verify_api_key)):
                     else:
                         raise
 
-            # 生成文件名
+            # 生成文件名 — 保存失败时降级为在线URL（和 server.py 一致，不中断返回）
             name_hash = hashlib.md5(f"{prompt}{seed}".encode()).hexdigest()[:8]
             fname = f"gen_{name_hash}.png"
-            fpath = os.path.join(save_path, fname)
-            with open(fpath, "wb") as f:
-                f.write(img_data)
+            image_path_url = url  # 默认使用在线URL
+            _saved_local = False
+            try:
+                fpath = os.path.join(save_path, fname)
+                with open(fpath, "wb") as f:
+                    f.write(img_data)
+                image_path_url = f"/exports/images/{fname}" if not save_dir else f"/exports/{save_dir}/{fname}"
+                _saved_local = True
+                logger.info(f"图片生成成功(本地): {fname}, {len(img_data)} bytes")
+            except Exception as save_err:
+                logger.warning(f"图片本地保存失败，使用在线URL: {save_err}")
 
             gen_seconds = time.time() - start_time
-            logger.info(f"图片生成成功: {fname}, {len(img_data)} bytes, {gen_seconds:.1f}s")
             return JSONResponse({"success": True, "data": {
-                "image_path": f"{save_dir}/{fname}",
+                "image_path": image_path_url,
                 "file_bytes": len(img_data),
                 "gen_seconds": gen_seconds,
                 "device": "pollinations",
                 "backend": backend,
                 "prompt": prompt,
+                "saved_local": _saved_local,
             }})
         else:
             return JSONResponse({"success": False, "error": f"后端 {backend} 暂未实现，请使用 pollinations"})
